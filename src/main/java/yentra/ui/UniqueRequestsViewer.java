@@ -520,7 +520,7 @@ public final class UniqueRequestsViewer {
         rightSide.add(resultCounter);
         rightSide.add(filterChips);
         filterBar.add(rightSide, BorderLayout.EAST);
-        filterBar.setPreferredSize(new java.awt.Dimension(500, 34));
+        filterBar.setPreferredSize(new java.awt.Dimension(500, 36));
 
         filterField.setBorder(BorderFactory.createEmptyBorder());
         filterField.setFont(filterField.getFont().deriveFont(13f));
@@ -538,9 +538,18 @@ public final class UniqueRequestsViewer {
         bar.add(respToReqBtn);
         bar.add(clear);
         bar.add(cbLiveExport);
-        bar.add(Box.createHorizontalStrut(10));
-        bar.add(filterBar);
-        return bar;
+
+        JPanel filterRow = new JPanel(new BorderLayout(8, 0));
+        filterRow.setBackground(PREMIUM_BG);
+        filterRow.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+        filterRow.add(filterBar, BorderLayout.CENTER);
+
+        JPanel toolbarPanel = new JPanel();
+        toolbarPanel.setLayout(new BoxLayout(toolbarPanel, BoxLayout.Y_AXIS));
+        toolbarPanel.setBackground(PREMIUM_BG);
+        toolbarPanel.add(bar);
+        toolbarPanel.add(filterRow);
+        return toolbarPanel;
     }
 
     private static final class PremiumChip extends JToggleButton {
