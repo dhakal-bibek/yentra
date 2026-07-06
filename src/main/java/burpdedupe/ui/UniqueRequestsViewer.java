@@ -162,6 +162,8 @@ public final class UniqueRequestsViewer {
         autoShare = active;
     }
 
+    private static final boolean IS_MAC = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
+
     /** Live export: mirror every collected unique request to a file Claude Code can read. */
     private final JCheckBox cbLiveExport = new JCheckBox("Live export → file", false);
     private Timer exportDebounce;
@@ -210,10 +212,14 @@ public final class UniqueRequestsViewer {
         editors.setResizeWeight(0.5);
 
         // Inline repeater: edit the request (left), Send, see the response (right) — no pop-up.
-        JButton sendEdited = new JButton("Send ▶  (Ctrl+Space)");
+        JButton sendEdited = new JButton("Send ▶  (" + (IS_MAC ? "Cmd+Enter" : "Ctrl+Space") + ")");
         sendEdited.setToolTipText("<html>Send the request as edited on the left; the response shows on the right.<br>"
-                + "Shortcut: <b>Ctrl+Space</b> (same as Burp Repeater).<br>"
-                + "Also works: <b>Ctrl+Enter</b>.</html>");
+                + (IS_MAC
+                    ? "<b>Cmd+Enter</b> (same as Burp Repeater on macOS).<br>"
+                       + "Ctrl+Space works only if you disable input-source switching<br>"
+                       + "in System Settings → Keyboard → Keyboard Shortcuts → Input Sources."
+                    : "<b>Ctrl+Space</b> (same as Burp Repeater). Also: <b>Ctrl+Enter</b>.")
+                + "</html>");
         sendEdited.addActionListener(e -> sendEditedRequest());
         JPanel sendBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         sendBar.add(new JLabel("Repeater:"));
@@ -924,10 +930,13 @@ public final class UniqueRequestsViewer {
     }
 
     /**
-     * Binds <b>Send</b> to Ctrl+Space and Ctrl+Enter. Ctrl+Space is handled via
-     * {@link Toolkit#addAWTEventListener} — operates at the native event level, before
-     * macOS Input Method or Swing key bindings see the keystroke. This is the same
-     * mechanism Burp Repeater uses to make Ctrl+Space work on macOS.
+     * Binds <b>Send</b> to platform-appropriate shortcuts:
+     * <ul>
+     *   <li><b>macOS</b> — Cmd+Enter (primary, same as Burp Repeater).
+     *       Ctrl+Space is also tried via AWTEventListener but may be consumed by the OS
+     *       for input-source switching.</li>
+     *   <li><b>Windows/Linux</b> — Ctrl+Space (primary, same as Burp Repeater). Ctrl+Enter as fallback.</li>
+     * </ul>
      */
     private void installSendKeys(JComponent c) {
         c.getActionMap().put("dedupe-send", new AbstractAction() {
@@ -936,18 +945,23 @@ public final class UniqueRequestsViewer {
             }
         });
         InputMap im = c.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
-        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
-        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
 
-        Toolkit.getDefaultToolkit().addAWTEventListener(e -> {
-            if (e.getID() != KeyEvent.KEY_PRESSED) return;
-            KeyEvent ke = (KeyEvent) e;
-            if (ke.getKeyCode() != KeyEvent.VK_SPACE) return;
-            if ((ke.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) == 0) return;
-            if (!root.isShowing()) return;
-            ke.consume();
-            SwingUtilities.invokeLater(this::sendEditedRequest);
-        }, AWTEvent.KEY_EVENT_MASK);
+        if (IS_MAC) {
+            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()), "dedupe-send");
+            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
+            Toolkit.getDefaultToolkit().addAWTEventListener(e -> {
+                if (e.getID() != KeyEvent.KEY_PRESSED) return;
+                KeyEvent ke = (KeyEvent) e;
+                if (ke.getKeyCode() != KeyEvent.VK_SPACE) return;
+                if ((ke.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) == 0) return;
+                if (!root.isShowing()) return;
+                ke.consume();
+                SwingUtilities.invokeLater(this::sendEditedRequest);
+            }, AWTEvent.KEY_EVENT_MASK);
+        } else {
+            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
+            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
+        }
     }
 
     private static void disableInputMethods(Component c) {
