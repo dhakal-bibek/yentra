@@ -270,9 +270,16 @@ The Match & Replace dialog is **non-modal** — it stays open after sending so y
 
 ## Inline Repeater
 
-Edit and resend any logged unique without leaving the view. Select a row in the Dedupe Live table or unique-requests window to load it into the editable request editor beneath the table. Tweak the request, then **Send ▶** — or **Ctrl+Space** (same shortcut as Burp Repeater). Ctrl+Enter also works as a secondary shortcut.
+A full Repeater-style interface built into the bottom half of every Dedupe Live / Unique Requests window — no need to switch to Burp's Repeater tab.
 
-The response shows on the right with a status / length / timing line. Uses Burp's HTTP client, so reissued requests land in **Logger**, not Proxy history.
+- **Request (left)** — editable Montoya HTTP request editor.
+- **Response (right)** — read-only response viewer with a prominent **status bar** showing the HTTP status code, response size (bytes/KB/MB), and timing in ms — same format as Burp Repeater.
+- **Send ▶** — sends the edited request via Burp's HTTP client. Shortcuts: **Cmd+Space** / **Ctrl+Space** (primary) and **Ctrl+Enter** (fallback).
+- **◀ ▶ Back/Forward** — full request/response history navigation. Every sent request is recorded; click ◀ to go back to a previous request+response pair, ▶ to go forward. Keyboard: **Alt+Left** / **Alt+Right**. History is pruned when you send after navigating back (append-style, like a browser).
+- **Cancel** — stops waiting for a response.
+- **Target display** — shows the host:port you're sending to.
+
+Reissued requests land in **Logger**, not Proxy history. Uses Burp's HTTP client.
 
 ---
 

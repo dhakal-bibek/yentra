@@ -19,6 +19,7 @@ import burpdedupe.proxy.UniqueFeed;
 
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
+import javax.swing.Box;
 import javax.swing.InputMap;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -39,6 +40,7 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.RowFilter;
+import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.WindowConstants;
@@ -60,6 +62,7 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.AWTEvent;
+import java.awt.KeyboardFocusManager;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
@@ -169,6 +172,14 @@ public final class UniqueRequestsViewer {
     private Timer exportDebounce;
     private static final Object EXPORT_LOCK = new Object();
 
+    private final java.util.List<RepeaterEntry> repeaterHistory = new ArrayList<>();
+    private int historyPos = -1;
+    private final JLabel responseInfo = new JLabel(" ");
+    private final JButton btnBack = new JButton("◀");
+    private final JButton btnForward = new JButton("▶");
+
+    private record RepeaterEntry(HttpRequest request, HttpResponse response, long elapsedMs) {}
+
     UniqueRequestsViewer(MontoyaApi api, List<HttpRequestResponse> uniques) {
         this(api, uniques, "Unique requests");
     }
@@ -188,7 +199,7 @@ public final class UniqueRequestsViewer {
         this.baseTitle = title;
         this.requestEditor = api.userInterface().createHttpRequestEditor(); // editable — inline repeater
         this.responseEditor = api.userInterface().createHttpResponseEditor(EditorOptions.READ_ONLY);
-        disableInputMethods(requestEditor.uiComponent());
+        watchdogInputMethods();
 
         this.model = new UniqueTableModel();
         seedRows(uniques);  // precompute cells off the render path (EDT here, but seeds are small/empty)
@@ -207,24 +218,67 @@ public final class UniqueRequestsViewer {
         applyColumnWidths(table);
         table.setComponentPopupMenu(buildTablePopup());
 
+        JPanel responsePanel = new JPanel(new BorderLayout());
+        responseInfo.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, Color.GRAY),
+                BorderFactory.createEmptyBorder(3, 8, 3, 8)));
+        responseInfo.setFont(responseInfo.getFont().deriveFont(Font.BOLD));
+        responsePanel.add(responseInfo, BorderLayout.NORTH);
+        responsePanel.add(responseEditor.uiComponent(), BorderLayout.CENTER);
+
         JSplitPane editors = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
-                requestEditor.uiComponent(), responseEditor.uiComponent());
+                requestEditor.uiComponent(), responsePanel);
         editors.setResizeWeight(0.5);
 
-        // Inline repeater: edit the request (left), Send, see the response (right) — no pop-up.
-        JButton sendEdited = new JButton("Send ▶  (Ctrl+Space)");
-        sendEdited.setToolTipText("<html>Send the request as edited on the left; the response shows on the right.<br>"
-                + "<b>Ctrl+Space</b> (same as Burp Repeater). Also: <b>Ctrl+Enter</b>."
-                + (IS_MAC ? "<br>On macOS, if Ctrl+Space doesn't work, use <b>Cmd+Enter</b> instead." : "")
+        btnBack.setToolTipText("Back (Alt+Left)");
+        btnBack.setEnabled(false);
+        btnBack.addActionListener(e -> navigateHistory(-1));
+
+        btnForward.setToolTipText("Forward (Alt+Right)");
+        btnForward.setEnabled(false);
+        btnForward.addActionListener(e -> navigateHistory(1));
+
+        JPanel editorPanel = new JPanel(new BorderLayout());
+
+        KeyStroke altLeft = KeyStroke.getKeyStroke(KeyEvent.VK_LEFT, KeyEvent.ALT_DOWN_MASK);
+        editorPanel.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(altLeft, "history-back");
+        editorPanel.getActionMap().put("history-back", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) { navigateHistory(-1); }
+        });
+        KeyStroke altRight = KeyStroke.getKeyStroke(KeyEvent.VK_RIGHT, KeyEvent.ALT_DOWN_MASK);
+        editorPanel.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(altRight, "history-forward");
+        editorPanel.getActionMap().put("history-forward", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) { navigateHistory(1); }
+        });
+
+        JButton sendEdited = new JButton("Send ▶");
+        sendEdited.setToolTipText("<html>Send (Cmd+Space / Ctrl+Space).<br>"
+                + (!IS_MAC ? "Also: Ctrl+Enter." : "")
                 + "</html>");
         sendEdited.addActionListener(e -> sendEditedRequest());
-        JPanel sendBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
-        sendBar.add(new JLabel("Repeater:"));
-        sendBar.add(sendEdited);
-        JPanel editorPanel = new JPanel(new BorderLayout());
-        editorPanel.add(sendBar, BorderLayout.NORTH);
+
+        JButton cancelBtn = new JButton("Cancel");
+        cancelBtn.addActionListener(e -> cancelRequest());
+
+        JLabel targetLabel = new JLabel("Target: ");
+        targetLabel.setFont(targetLabel.getFont().deriveFont(Font.PLAIN, 11f));
+
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 2));
+        toolbar.add(btnBack);
+        toolbar.add(btnForward);
+        toolbar.add(new JSeparator(SwingConstants.VERTICAL));
+        toolbar.add(sendEdited);
+        toolbar.add(Box.createHorizontalStrut(4));
+        toolbar.add(new JLabel("Cmd+Space / Ctrl+Space"));
+        toolbar.add(Box.createHorizontalStrut(12));
+        toolbar.add(cancelBtn);
+        toolbar.add(Box.createHorizontalStrut(12));
+        toolbar.add(targetLabel);
+        toolbar.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
+
+        editorPanel.add(toolbar, BorderLayout.NORTH);
         editorPanel.add(editors, BorderLayout.CENTER);
-        installSendKeys(editorPanel);          // Ctrl+Space / Ctrl+Enter → Send
+        installSendKeys(editorPanel);
 
         JSplitPane main = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                 new JScrollPane(table), editorPanel);
@@ -880,16 +934,52 @@ public final class UniqueRequestsViewer {
         if (row == null || row.rr == null) return;
         HttpRequestResponse rr = row.rr;
         requestEditor.setRequest(rr.request());
-        responseEditor.setResponse(
-                rr.hasResponse() && rr.response() != null ? rr.response() : HttpResponse.httpResponse());
+        boolean hasResp = rr.hasResponse() && rr.response() != null;
+        HttpResponse resp = hasResp ? rr.response() : null;
+        responseEditor.setResponse(resp != null ? resp : HttpResponse.httpResponse());
+        showResponseInfo(resp, -1);
     }
 
-    /**
-     * Inline repeater: sends whatever is currently in the (editable) request editor — including the
-     * user's edits — via Burp's HTTP client, then shows the response on the right with a status /
-     * length / timing line. Select a logged row to load it, tweak the request, then Send. Runs off the
-     * EDT; reissued requests appear in Logger, not Proxy history (like Magic Cookie / Match &amp; Replace).
-     */
+    private void showResponseInfo(HttpResponse resp, long elapsedMs) {
+        if (resp == null) {
+            responseInfo.setText(" ");
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("HTTP ").append(resp.statusCode());
+        String reason = resp.reasonPhrase();
+        if (reason != null && !reason.isEmpty()) sb.append(" ").append(reason);
+        sb.append("  |  ").append(formatBytes(resp.body().length()));
+        if (elapsedMs >= 0) sb.append("  |  ").append(elapsedMs).append(" ms");
+        responseInfo.setText(sb.toString());
+    }
+
+    private static String formatBytes(int b) {
+        if (b < 1024) return b + " bytes";
+        if (b < 1024 * 1024) return String.format("%.1f KB", b / 1024.0);
+        return String.format("%.1f MB", b / (1024.0 * 1024.0));
+    }
+
+    private void navigateHistory(int delta) {
+        int newPos = historyPos + delta;
+        if (newPos < 0 || newPos >= repeaterHistory.size()) return;
+        RepeaterEntry entry = repeaterHistory.get(newPos);
+        requestEditor.setRequest(entry.request());
+        responseEditor.setResponse(entry.response() != null ? entry.response() : HttpResponse.httpResponse());
+        showResponseInfo(entry.response(), entry.elapsedMs());
+        historyPos = newPos;
+        updateHistoryButtons();
+    }
+
+    private void updateHistoryButtons() {
+        btnBack.setEnabled(historyPos > 0);
+        btnForward.setEnabled(historyPos < repeaterHistory.size() - 1);
+    }
+
+    private void cancelRequest() {
+        status.setText(" ");
+    }
+
     private void sendEditedRequest() {
         HttpRequest req;
         try {
@@ -903,6 +993,7 @@ public final class UniqueRequestsViewer {
             return;
         }
         status.setText("Sending…");
+        responseInfo.setText("Sending…");
         Thread t = new Thread(() -> {
             long t0 = System.currentTimeMillis();
             try {
@@ -911,14 +1002,17 @@ public final class UniqueRequestsViewer {
                 HttpResponse resp = out != null && out.hasResponse() ? out.response() : null;
                 SwingUtilities.invokeLater(() -> {
                     responseEditor.setResponse(resp != null ? resp : HttpResponse.httpResponse());
-                    status.setText(resp != null
-                            ? "HTTP " + resp.statusCode() + "  •  " + resp.body().length() + " bytes  •  " + ms + " ms"
-                            : "No response (" + ms + " ms).");
+                    showResponseInfo(resp, ms);
+                    status.setText("Done.");
+                    addRepeaterEntry(req, resp, ms);
                 });
                 log("Repeater  " + safeReqLine(req) + "   ←   "
                         + (resp != null ? resp.statusCode() + " " + resp.body().length() + "b" : "(no response)"));
             } catch (RuntimeException ex) {
-                SwingUtilities.invokeLater(() -> status.setText("Send failed: " + ex.getMessage()));
+                SwingUtilities.invokeLater(() -> {
+                    responseInfo.setText("Send failed");
+                    status.setText("Send failed: " + ex.getMessage());
+                });
                 api.logging().logToError("[burp-dedupe] inline repeater send failed: " + ex);
             }
         }, "burp-dedupe-repeater-send");
@@ -926,11 +1020,19 @@ public final class UniqueRequestsViewer {
         t.start();
     }
 
+    private void addRepeaterEntry(HttpRequest req, HttpResponse resp, long ms) {
+        while (repeaterHistory.size() > historyPos + 1) {
+            repeaterHistory.remove(repeaterHistory.size() - 1);
+        }
+        repeaterHistory.add(new RepeaterEntry(req, resp, ms));
+        historyPos = repeaterHistory.size() - 1;
+        updateHistoryButtons();
+    }
+
     /**
-     * Binds <b>Send</b> to Ctrl+Space (and Cmd+Enter on macOS as fallback).
-     * Uses {@code EventQueue.push()} to intercept key events at the lowest level
-     * in Java's AWT pipeline — before KeyboardFocusManager, before InputMethod,
-     * before any component sees the event.
+     * Binds <b>Send</b> to Cmd+Space, Ctrl+Space, and Ctrl+Enter.
+     * Uses {@code EventQueue.push()} for Ctrl+Space interception plus
+     * {@code WHEN_IN_FOCUSED_WINDOW} InputMap bindings.
      */
     private void installSendKeys(JComponent c) {
         c.getActionMap().put("dedupe-send", new AbstractAction() {
@@ -938,13 +1040,12 @@ public final class UniqueRequestsViewer {
                 if (root.isShowing()) sendEditedRequest();
             }
         });
+
+        int cmd = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
         InputMap im = c.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
-        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
-        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
-        if (IS_MAC) {
-            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER,
-                    Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()), "dedupe-send");
-        }
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, cmd), "dedupe-send");             // Cmd+Space (macOS) / Ctrl+Space (Win)
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send"); // Ctrl+Space (always)
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");  // Ctrl+Enter
 
         java.awt.EventQueue queue = Toolkit.getDefaultToolkit().getSystemEventQueue();
         queue.push(new java.awt.EventQueue() {
@@ -954,11 +1055,13 @@ public final class UniqueRequestsViewer {
                     KeyEvent ke = (KeyEvent) event;
                     if (ke.getID() == KeyEvent.KEY_PRESSED
                             && ke.getKeyCode() == KeyEvent.VK_SPACE
-                            && (ke.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) != 0
                             && root.isShowing()) {
-                        ke.consume();
-                        sendEditedRequest();
-                        return;
+                        int mods = ke.getModifiersEx();
+                        if ((mods & cmd) != 0 || (mods & KeyEvent.CTRL_DOWN_MASK) != 0) {
+                            ke.consume();
+                            sendEditedRequest();
+                            return;
+                        }
                     }
                 }
                 super.dispatchEvent(event);
@@ -975,6 +1078,28 @@ public final class UniqueRequestsViewer {
                 disableInputMethods(child);
             }
         }
+    }
+
+    /**
+     * On macOS, CInputMethod swallows Ctrl+Space for input-source switching.
+
+     * enableInputMethods(false) on the focused text component stops this
+     * at the native level. Montoya editors lazily create their internal
+     * text components, so we can't just call disableInputMethods once in
+     * the constructor — we watch every focus change and re-apply when the
+     * focus lands anywhere inside the request editor. A delayed initial
+     * pass via invokeLater catches the editor's first creation.
+     */
+    private void watchdogInputMethods() {
+        KeyboardFocusManager.getCurrentKeyboardFocusManager()
+                .addPropertyChangeListener("permanentFocusOwner", evt -> {
+                    Component focus = (Component) evt.getNewValue();
+                    if (focus == null) return;
+                    if (!root.isShowing()) return;
+                    if (!SwingUtilities.isDescendingFrom(focus, requestEditor.uiComponent())) return;
+                    disableInputMethods(focus);
+                });
+        SwingUtilities.invokeLater(() -> disableInputMethods(requestEditor.uiComponent()));
     }
 
     /** All currently selected rows (in view order), skipping nulls. Empty if nothing is selected. */
