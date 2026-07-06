@@ -448,6 +448,10 @@ public final class UniqueRequestsViewer {
                 item.addActionListener(ev -> responseToRequest(m));
                 methodMenu.add(item);
             }
+            methodMenu.addSeparator();
+            JMenuItem allItem = new JMenuItem("All (GET+POST+PUT+PATCH+DELETE)");
+            allItem.addActionListener(ev -> responseToRequestAll());
+            methodMenu.add(allItem);
             methodMenu.show(respToReqBtn, 0, respToReqBtn.getHeight());
         });
 
@@ -2395,55 +2399,74 @@ public final class UniqueRequestsViewer {
     }
 
     private void responseToRequest(String targetMethod) {
-        List<HttpRequestResponse> sel = selectedRows();
-        if (sel.isEmpty()) { status.setText("Select a request with a JSON response first."); return; }
-        List<HttpRequest> generated = new ArrayList<>();
-        for (HttpRequestResponse rr : sel) {
-            if (rr == null || rr.request() == null || !rr.hasResponse() || rr.response() == null) continue;
-            String respBody = "";
-            try { respBody = rr.response().bodyToString(); } catch (RuntimeException e) { /* no body */ }
-            if (respBody == null || respBody.strip().isEmpty()) continue;
-
-            String stripped = respBody.strip();
-            if (!stripped.startsWith("{") && !stripped.startsWith("[")) continue;
-
-            Object json = null;
-            try {
-                json = parseJson(stripped);
-            } catch (RuntimeException e) {
-                try { json = parseJson(sanitizeJson(stripped)); }
-                catch (RuntimeException e2) {
-                    json = extractJsonSegment(stripped);
-                }
-            }
-            if (json == null) continue;
-
-            HttpRequest base = rr.request();
-            HttpRequest out;
-            if ("GET".equalsIgnoreCase(targetMethod)) {
-                List<KeyValue> flat = flattenJson(json);
-                String qs = toQueryString(flat);
-                String path = base.path();
-                int qi = path.indexOf('?');
-                out = base.withPath((qi >= 0 ? path.substring(0, qi) : path) + (qs.isEmpty() ? "" : "?" + qs))
-                    .withMethod("GET")
-                    .withBody("");
-                if (out.hasHeader("Content-Type")) out = out.withRemovedHeader("Content-Type");
-                if (out.hasHeader("Content-Length")) out = out.withRemovedHeader("Content-Length");
-            } else {
-                String pretty = prettyPrintJson(stripped);
-                out = base.withMethod(targetMethod.toUpperCase())
-                    .withBody(pretty);
-                if (out.hasHeader("Content-Type")) out = out.withUpdatedHeader("Content-Type", "application/json");
-                else out = out.withAddedHeader("Content-Type", "application/json");
-            }
-            generated.add(out);
-        }
+        List<HttpRequest> generated = buildRequestsFromResponses(targetMethod);
         if (generated.isEmpty()) {
             status.setText("No requests with valid JSON responses selected.");
             return;
         }
         streamConversions(generated, "Response → " + targetMethod + "  (" + generated.size() + " req)");
+    }
+
+    private void responseToRequestAll() {
+        List<HttpRequest> generated = buildRequestsFromResponses(null);
+        if (generated.isEmpty()) {
+            status.setText("No requests with valid JSON responses selected.");
+            return;
+        }
+        streamConversions(generated, "Response → All  (" + generated.size() + " req)");
+    }
+
+    private List<HttpRequest> buildRequestsFromResponses(String singleMethod) {
+        List<HttpRequestResponse> sel = selectedRows();
+        String[] methods = singleMethod != null ? new String[]{singleMethod}
+                : new String[]{"GET", "POST", "PUT", "PATCH", "DELETE"};
+        List<HttpRequest> generated = new ArrayList<>();
+        for (HttpRequestResponse rr : sel) {
+            if (rr == null || rr.request() == null || !rr.hasResponse() || rr.response() == null) continue;
+            String respBody = "";
+            try { respBody = rr.response().bodyToString(); } catch (RuntimeException e) {}
+            if (respBody == null || respBody.strip().isEmpty()) continue;
+            String stripped = respBody.strip();
+            if (!stripped.startsWith("{") && !stripped.startsWith("[")) continue;
+
+            Object json = parseResponseJson(stripped);
+            if (json == null) continue;
+
+            HttpRequest base = rr.request();
+            for (String m : methods) {
+                HttpRequest out = buildReqFromResponse(base, json, stripped, m);
+                if (out != null) generated.add(out);
+            }
+        }
+        return generated;
+    }
+
+    private Object parseResponseJson(String stripped) {
+        try { return parseJson(stripped); }
+        catch (RuntimeException e) {
+            try { return parseJson(sanitizeJson(stripped)); }
+            catch (RuntimeException e2) { return extractJsonSegment(stripped); }
+        }
+    }
+
+    private HttpRequest buildReqFromResponse(HttpRequest base, Object json, String raw, String method) {
+        HttpRequest out;
+        if ("GET".equalsIgnoreCase(method)) {
+            List<KeyValue> flat = flattenJson(json);
+            String qs = toQueryString(flat);
+            String path = base.path();
+            int qi = path.indexOf('?');
+            out = base.withPath((qi >= 0 ? path.substring(0, qi) : path) + (qs.isEmpty() ? "" : "?" + qs))
+                .withMethod("GET").withBody("");
+            if (out.hasHeader("Content-Type")) out = out.withRemovedHeader("Content-Type");
+            if (out.hasHeader("Content-Length")) out = out.withRemovedHeader("Content-Length");
+        } else {
+            String pretty = prettyPrintJson(raw);
+            out = base.withMethod(method.toUpperCase()).withBody(pretty);
+            if (out.hasHeader("Content-Type")) out = out.withUpdatedHeader("Content-Type", "application/json");
+            else out = out.withAddedHeader("Content-Type", "application/json");
+        }
+        return out;
     }
 
     private static String prettyPrintJson(String raw) {
