@@ -1,33 +1,54 @@
 # Yentra
 
-Burp Suite extension + port-based highlighter: dedupes proxy history into a live unique-request feed and color-codes attacker/victim traffic by listener port (PwnFox-style) — built for Android/iOS multi-account IDOR/BOLA testing, with Magic Cookie, Match & Replace, live peer sharing, Caido-style filter palette, inline Repeater, AI bridge, and .http export for Claude Code.
+Burp Suite extension + port-based highlighter: dedupes proxy history into a live unique-request feed and color-codes attacker/victim traffic by listener port (PwnFox-style). Features **Live Share** — the first-ever real-time peer-to-peer request sharing inside Burp Suite — plus Magic Cookie, Match & Replace, Caido-style filter palette, inline Repeater, AI bridge, and .http export for Claude Code.
+
+---
+
+## 🌐 Live Share — Real-Time Peer Collaboration
+
+> **Industry-first:** No other Burp extension lets two testers share captured HTTP requests live, directly inside Burp. Host a server, connect to a friend, and every unique request you capture appears instantly on their screen — color-coded, deduplicated, and ready to test.
+
+| Mode | How it works | Best for |
+|---|---|---|
+| **Direct TCP** | Host a server on any port; peers connect directly via host:port | Same network, VPN |
+| **SSH Tunnel** | Auto-tunnels through serveo.net for a public address | Behind NAT, no port forwarding |
+| **HTTP Relay** | Self-host the relay with Docker (`relay-server/`); peers join by room ID | Both peers behind NAT/firewall |
+| **UPnP** | Automatic router port mapping | Home/office networks with UPnP-enabled routers |
+
+**What makes it unique:**
+- Requests arrive **already deduplicated** — only `[YENTRA] UNIQUE` entries are shared
+- **Auto-share mode:** every new unique is forwarded to all connected peers in real time
+- **Re-issue received → Proxy history:** replay received requests through your local proxy listener to add role tags (attacker/victim)
+- **Room-based relay** with random 8-char IDs — drop-in, no registration
+- **Magenta highlights** distinguish shared requests in your Yentra Live feed
 
 ---
 
 ## Table of Contents
 
 1. [Installation](#installation)
-2. [Architecture Overview](#architecture-overview)
-3. [Yentra Config Tab](#yentra-config-tab)
+2. [🌐 Live Share — Peer Collaboration](#-live-share--real-time-peer-collaboration)
+3. [Architecture Overview](#architecture-overview)
+4. [Yentra Config Tab](#yentra-config-tab)
    - [Behavior & Signature Fields](#behavior--signature-fields)
    - [Presets](#presets)
    - [Stats & Header Overrides](#stats--header-overrides)
    - [History Stamping](#history-stamping)
-4. [Yentra Live Tab](#yentra-live-tab)
+5. [Yentra Live Tab](#yentra-live-tab)
    - [Toolbar Actions](#toolbar-actions)
    - [Inline Repeater](#inline-repeater)
    - [Response Info Bar](#response-info-bar)
    - [History Navigation](#history-navigation)
-5. [Bambda-Style Filter](#bambda-style-filter)
+6. [Bambda-Style Filter](#bambda-style-filter)
    - [Prefix Tokens](#prefix-tokens)
    - [Filter Chips](#filter-chips)
    - [Command Palette](#command-palette)
    - [Status Operators](#status-operators)
-6. [IDOR / BOLA Tools](#idor--bola-tools)
+7. [IDOR / BOLA Tools](#idor--bola-tools)
    - [Magic Cookie](#magic-cookie)
    - [Match & Replace](#match--replace)
-7. [Right-Click Actions](#right-click-actions)
-8. [Remove from Scope](#remove-from-scope)
+8. [Right-Click Actions](#right-click-actions)
+9. [Remove from Scope](#remove-from-scope)
 9. [Yentra Share (Live Share)](#yentra-share-live-share)
 10. [AI Bridge (Live Export)](#ai-bridge-live-export)
 11. [Attacker / Victim Port Highlighting](#attacker--victim-port-highlighting)
@@ -288,25 +309,52 @@ A confirmation dialog shows exactly what will be excluded. Multi-selection dedup
 
 ## Yentra Share (Live Share)
 
-Real-time request sharing with peers — host a server or connect to a friend.
+> **⚡ The only Burp extension with real-time peer-to-peer HTTP request sharing.**
+> Two testers, two Burp instances, one shared feed. No exports, no copy-paste, no waiting.
 
-**Hosting:**
-- Start a TCP server on any port (default 9999)
-- Automatic UPnP port mapping for NAT traversal
-- Optional SSH tunnel via serveo.net for firewall bypass
+### How It Works
 
-**Connecting:**
-- Direct TCP connection to host:port
-- HTTP relay mode for when both peers are behind NAT (self-host the relay with Docker: `cd relay-server && docker compose up -d`)
-- Room-based isolation via random 8-char room IDs
+1. **Tester A** starts a server on the **Yentra Share** tab (port 9999)
+2. **Tester B** connects to Tester A's address
+3. Tester A browses the target — every `[YENTRA] UNIQUE` request appears **instantly** in Tester B's **Yentra Live** feed, color-coded magenta
+4. Tester B can replay received requests through their own proxy listener to add role tags (attacker/victim)
+5. Both testers see identical, deduplicated feeds in real time
 
-**Sharing:**
-- **Share button** sends the current request to all connected peers
-- **Auto-share new uniques** forwards every fresh `UNIQUE` to peers in real time
-- **Re-issue received → Proxy history** replays received requests through a local proxy listener for role tagging
-- Received requests appear in Yentra Live with magenta highlights
+### Four Connection Modes — Always Reachable
 
-**Relay server:** Self-hosted with Docker. A simple HTTP relay that brokers room-based message exchange — two peers join the same room and requests flow through it.
+| Mode | Setup | Best For |
+|---|---|---|
+| **Direct TCP** | Open a port, share the IP — zero config | Same LAN / VPN |
+| **SSH Tunnel** | Tick one checkbox — auto-tunnels through `serveo.net` | Behind NAT, no port forwarding needed |
+| **HTTP Relay** | `docker compose up -d` in `relay-server/`, share the room ID | Both peers fully firewalled |
+| **UPnP IGD** | Automatic — tries to map a port on your router | Home/office networks |
+
+### Sharing Features
+
+| Feature | Description |
+|---|---|
+| **Manual Share** | Click **Share** on any selected request to send it to all connected peers |
+| **Auto-Share** | Every new `[YENTRA] UNIQUE` is automatically forwarded — toggle on/off |
+| **Re-issue to Proxy** | Replay received requests through a local Burp proxy listener (default 8080) so they appear in your HTTP history with role tags |
+| **Magenta Highlighting** | Shared requests are visually distinct in Yentra Live |
+| **Double-click → Repeater** | Any received request opens in a Burp Repeater tab with one double-click |
+| **500-entry log** | Scrollable list of all received requests with method + URL preview |
+
+### Self-Hosting the Relay
+
+```bash
+cd relay-server
+docker compose up -d
+```
+
+The relay is a lightweight Java HTTP server. Two peers connect to it with the same room ID and messages are brokered in real time. No database, no auth, no accounts — just room-based pub/sub. Works behind any NAT or firewall.
+
+### Use Cases
+
+- **Pair testing:** One tester browses as attacker, the other as victim — both see identical traffic
+- **Training / mentoring:** Senior tester shares live traffic with a junior in real time
+- **Distributed testing:** Two testers on different networks testing the same target simultaneously
+- **Demo / presentation:** Share your Burp session live without screen sharing
 
 ---
 
