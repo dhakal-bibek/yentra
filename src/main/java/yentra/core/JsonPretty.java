@@ -1,4 +1,4 @@
-package burpdedupe.core;
+package yentra.core;
 
 /**
  * Dependency-free JSON helpers used by the "Body Only" response tab and the AI export: strip the

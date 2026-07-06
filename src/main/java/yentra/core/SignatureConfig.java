@@ -1,4 +1,4 @@
-package burpdedupe.core;
+package yentra.core;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -7,7 +7,7 @@ import java.util.Set;
 /**
  * Immutable snapshot of the signature rules. Read on every request, written rarely
  * (only when the user changes settings). Using an immutable snapshot lets the hot
- * path read with no synchronization — see {@link DedupeEngine#configRef}.
+ * path read with no synchronization — see {@link YentraEngine#configRef}.
  */
 public final class SignatureConfig {
 

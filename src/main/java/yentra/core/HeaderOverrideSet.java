@@ -1,4 +1,4 @@
-package burpdedupe.core;
+package yentra.core;
 
 import java.util.ArrayList;
 import java.util.Collections;

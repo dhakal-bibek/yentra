@@ -1,4 +1,4 @@
-package burpdedupe.liveshare;
+package yentra.liveshare;
 
 import java.io.*;
 import java.util.concurrent.CountDownLatch;

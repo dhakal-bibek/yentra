@@ -1,4 +1,4 @@
-package burpdedupe.core;
+package yentra.core;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.params.HttpParameterType;
@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
  *       very large engagements.</li>
  * </ul>
  */
-public final class DedupeEngine {
+public final class YentraEngine {
 
     public enum Verdict {
         UNIQUE,    // first time we see this signature
@@ -82,7 +82,7 @@ public final class DedupeEngine {
         }
     });
 
-    public DedupeEngine(MontoyaApi api, SignatureConfig initial) {
+    public YentraEngine(MontoyaApi api, SignatureConfig initial) {
         this.api = api;
         this.configRef = new AtomicReference<>(initial);
     }

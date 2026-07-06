@@ -45,7 +45,7 @@ jobs:
       - name: Locate JAR
         id: jar
         run: |
-          jar=$(ls build/libs/burp-dedupe-*.jar | head -n1)
+          jar=$(ls build/libs/yentra-*.jar | head -n1)
           echo "path=$jar" >> "$GITHUB_OUTPUT"
           echo "name=$(basename "$jar")" >> "$GITHUB_OUTPUT"
 

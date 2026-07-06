@@ -1,1 +1,1 @@
-rootProject.name = "burp-dedupe"
+rootProject.name = "yentra"

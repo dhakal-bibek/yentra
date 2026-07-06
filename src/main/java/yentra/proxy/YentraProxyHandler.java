@@ -1,4 +1,4 @@
-package burpdedupe.proxy;
+package yentra.proxy;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.Annotations;
@@ -7,7 +7,7 @@ import burp.api.montoya.proxy.http.InterceptedResponse;
 import burp.api.montoya.proxy.http.ProxyResponseHandler;
 import burp.api.montoya.proxy.http.ProxyResponseReceivedAction;
 import burp.api.montoya.proxy.http.ProxyResponseToBeSentAction;
-import burpdedupe.core.DedupeEngine;
+import yentra.core.YentraEngine;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -19,21 +19,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * callback ({@code handleResponseToBeSent}) is just pass-through.
  *
  * <p>The notes string is prefixed with a fixed tag so a column-sort groups verdicts
- * cleanly: "[DEDUPE] UNIQUE", "[DEDUPE] DUPE x3", etc. The user can mass-select all
+ * cleanly: "[YENTRA] UNIQUE", "[YENTRA] DUPE x3", etc. The user can mass-select all
  * UNIQUE rows after sorting by Notes.
  */
-public final class DedupeProxyHandler implements ProxyResponseHandler {
+public final class YentraProxyHandler implements ProxyResponseHandler {
 
-    public static final String NOTE_PREFIX = "[DEDUPE]";
+    public static final String NOTE_PREFIX = "[YENTRA]";
 
     private final MontoyaApi api;
-    private final DedupeEngine engine;
+    private final YentraEngine engine;
     private final AtomicBoolean enabled;
     private final AtomicBoolean colorize;
     private final AtomicBoolean preserveExistingNotes;
     private final UniqueFeed feed;
 
-    public DedupeProxyHandler(MontoyaApi api, DedupeEngine engine,
+    public YentraProxyHandler(MontoyaApi api, YentraEngine engine,
                               AtomicBoolean enabled, AtomicBoolean colorize,
                               AtomicBoolean preserveExistingNotes, UniqueFeed feed) {
         this.api = api;
@@ -50,7 +50,7 @@ public final class DedupeProxyHandler implements ProxyResponseHandler {
             return ProxyResponseReceivedAction.continueWith(response);
         }
 
-        DedupeEngine.Result result;
+        YentraEngine.Result result;
         try {
             // Attacker/victim role ports (PORT_RULES) dedupe across identities: the same request from
             // either login shares one count, so the victim's repeat of an attacker-seen endpoint becomes
@@ -64,7 +64,7 @@ public final class DedupeProxyHandler implements ProxyResponseHandler {
             }
         } catch (RuntimeException e) {
             // Never let a bug here block traffic.
-            api.logging().logToError("[burp-dedupe] classify failed: " + e);
+            api.logging().logToError("[yentra] classify failed: " + e);
             return ProxyResponseReceivedAction.continueWith(response);
         }
 
@@ -75,8 +75,8 @@ public final class DedupeProxyHandler implements ProxyResponseHandler {
         if (preserveExistingNotes.get() && !existingNotes.isEmpty() && !existingNotes.contains(NOTE_PREFIX)) {
             newNotes = dedupeNote + " | " + existingNotes;
         } else {
-            // Strip any prior dedupe note (re-classifications can occur after config reset).
-            String stripped = stripDedupeNote(existingNotes);
+            // Strip any prior yentra note (re-classifications can occur after config reset).
+            String stripped = stripYentraNote(existingNotes);
             newNotes = stripped.isEmpty() ? dedupeNote : dedupeNote + " | " + stripped;
         }
 
@@ -89,16 +89,16 @@ public final class DedupeProxyHandler implements ProxyResponseHandler {
                     PortHighlightHandler.colorFor(response.listenerInterface(), result.verdict()));
         }
 
-        // Push every UNIQUE straight to the live view, in memory — the live "Dedupe Live" tab no
+        // Push every UNIQUE straight to the live view, in memory — the live "Yentra Live" tab no
         // longer depends on re-reading these notes back out of Proxy history (which breaks if another
         // extension overwrites the Notes, or annotations don't round-trip). The tab still polls
         // history as a back-fill and dedupes the two paths by the proxy message id.
-        if (feed != null && result.verdict() == DedupeEngine.Verdict.UNIQUE) {
+        if (feed != null && result.verdict() == YentraEngine.Verdict.UNIQUE) {
             try {
                 feed.publish(HttpRequestResponse.httpRequestResponse(
                         response.initiatingRequest(), response, updated), response.messageId());
             } catch (RuntimeException e) {
-                api.logging().logToError("[burp-dedupe] live publish failed: " + e);
+                api.logging().logToError("[yentra] live publish failed: " + e);
             }
         }
 
@@ -110,9 +110,9 @@ public final class DedupeProxyHandler implements ProxyResponseHandler {
         return ProxyResponseToBeSentAction.continueWith(response);
     }
 
-    private static String stripDedupeNote(String notes) {
+    private static String stripYentraNote(String notes) {
         if (notes == null || notes.isEmpty()) return "";
-        // Notes we wrote look like: "[DEDUPE] UNIQUE" or "[DEDUPE] DUPE x3 | original notes"
+        // Notes we wrote look like: "[YENTRA] UNIQUE" or "[YENTRA] DUPE x3 | original notes"
         int idx = notes.indexOf(NOTE_PREFIX);
         if (idx != 0) return notes;
         int sep = notes.indexOf(" | ");

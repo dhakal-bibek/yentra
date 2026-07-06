@@ -1,4 +1,4 @@
-package burpdedupe.liveshare;
+package yentra.liveshare;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.HttpRequestResponse;
@@ -43,7 +43,7 @@ public class ShareClient {
         readThread = new Thread(this::readLoop, "liveshare-client-read");
         readThread.setDaemon(true);
         readThread.start();
-        api.logging().logToOutput("[burp-dedupe] Live Share connected to " + host + ":" + port);
+        api.logging().logToOutput("[yentra] Live Share connected to " + host + ":" + port);
         if (onConnectionChange != null) onConnectionChange.run();
     }
 
@@ -52,7 +52,7 @@ public class ShareClient {
         connected = false;
         try { if (socket != null) socket.close(); } catch (IOException ignored) {}
         if (readThread != null) readThread.interrupt();
-        api.logging().logToOutput("[burp-dedupe] Live Share disconnected");
+        api.logging().logToOutput("[yentra] Live Share disconnected");
         if (onConnectionChange != null) onConnectionChange.run();
     }
 
@@ -70,7 +70,7 @@ public class ShareClient {
                 dos.flush();
             }
         } catch (IOException e) {
-            api.logging().logToError("[burp-dedupe] share send failed: " + e);
+            api.logging().logToError("[yentra] share send failed: " + e);
             disconnect();
         }
     }
@@ -91,7 +91,7 @@ public class ShareClient {
         } catch (EOFException | SocketException ignored) {
         } catch (IOException e) {
             if (connected) {
-                api.logging().logToError("[burp-dedupe] client receive: " + e);
+                api.logging().logToError("[yentra] client receive: " + e);
             }
         } finally {
             disconnect();

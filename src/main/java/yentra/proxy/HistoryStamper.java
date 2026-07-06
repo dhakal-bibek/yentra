@@ -1,10 +1,10 @@
-package burpdedupe.proxy;
+package yentra.proxy;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.Annotations;
 import burp.api.montoya.core.HighlightColor;
 import burp.api.montoya.proxy.ProxyHttpRequestResponse;
-import burpdedupe.core.DedupeEngine;
+import yentra.core.YentraEngine;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,16 +24,16 @@ public final class HistoryStamper {
 
     public interface Progress {
         /** Called from the worker thread. Implementations should marshal to EDT themselves. */
-        void onProgress(int done, int total, DedupeEngine.Result lastResult);
+        void onProgress(int done, int total, YentraEngine.Result lastResult);
         void onFinished(int totalProcessed, int stamped, int skipped, boolean cancelled);
     }
 
     private final MontoyaApi api;
-    private final DedupeEngine engine;
+    private final YentraEngine engine;
     private final AtomicBoolean colorize;
     private final AtomicBoolean preserveNotes;
 
-    public HistoryStamper(MontoyaApi api, DedupeEngine engine,
+    public HistoryStamper(MontoyaApi api, YentraEngine engine,
                           AtomicBoolean colorize, AtomicBoolean preserveNotes) {
         this.api = api;
         this.engine = engine;
@@ -52,7 +52,7 @@ public final class HistoryStamper {
         try {
             history = api.proxy().history();
         } catch (RuntimeException e) {
-            api.logging().logToError("[burp-dedupe] failed to read proxy history: " + e);
+            api.logging().logToError("[yentra] failed to read proxy history: " + e);
             progress.onFinished(0, 0, 0, false);
             return;
         }
@@ -69,7 +69,7 @@ public final class HistoryStamper {
         for (ProxyHttpRequestResponse entry : history) {
             if (cancel.get()) { cancelled = true; break; }
             i++;
-            DedupeEngine.Result result;
+            YentraEngine.Result result;
             try {
                 if (!entry.hasResponse()) { skipped++; continue; }
                 // Match the live handler: role-port (attacker/victim) entries dedupe across identities.
@@ -80,7 +80,7 @@ public final class HistoryStamper {
                     result = engine.classify(entry.finalRequest(), entry.response());
                 }
             } catch (RuntimeException e) {
-                api.logging().logToError("[burp-dedupe] classify-history failed for entry "
+                api.logging().logToError("[yentra] classify-history failed for entry "
                         + entry.id() + ": " + e);
                 skipped++;
                 continue;
@@ -90,7 +90,7 @@ public final class HistoryStamper {
                 applyAnnotations(entry, result);
                 stamped++;
             } catch (RuntimeException e) {
-                api.logging().logToError("[burp-dedupe] failed to stamp entry "
+                api.logging().logToError("[yentra] failed to stamp entry "
                         + entry.id() + ": " + e);
                 skipped++;
             }
@@ -102,17 +102,17 @@ public final class HistoryStamper {
         progress.onFinished(i, stamped, skipped, cancelled);
     }
 
-    private void applyAnnotations(ProxyHttpRequestResponse entry, DedupeEngine.Result r) {
+    private void applyAnnotations(ProxyHttpRequestResponse entry, YentraEngine.Result r) {
         Annotations a = entry.annotations();
         if (a == null) return; // shouldn't happen, but defensive
 
         String existing = a.hasNotes() ? a.notes() : "";
-        String tag = DedupeProxyHandler.NOTE_PREFIX + " " + r.shortLabel();
+        String tag = YentraProxyHandler.NOTE_PREFIX + " " + r.shortLabel();
         String next;
-        if (preserveNotes.get() && !existing.isEmpty() && !existing.contains(DedupeProxyHandler.NOTE_PREFIX)) {
+        if (preserveNotes.get() && !existing.isEmpty() && !existing.contains(YentraProxyHandler.NOTE_PREFIX)) {
             next = tag + " | " + existing;
         } else {
-            String stripped = stripDedupeNote(existing);
+            String stripped = stripYentraNote(existing);
             next = stripped.isEmpty() ? tag : tag + " | " + stripped;
         }
         a.setNotes(next);
@@ -122,23 +122,23 @@ public final class HistoryStamper {
         }
     }
 
-    private static String stripDedupeNote(String notes) {
+    private static String stripYentraNote(String notes) {
         if (notes == null || notes.isEmpty()) return "";
-        if (!notes.startsWith(DedupeProxyHandler.NOTE_PREFIX)) return notes;
+        if (!notes.startsWith(YentraProxyHandler.NOTE_PREFIX)) return notes;
         int sep = notes.indexOf(" | ");
         return sep < 0 ? "" : notes.substring(sep + 3);
     }
 
     /** Convenience: run on a daemon thread. */
     public Thread runAsync(AtomicBoolean cancel, Progress progress) {
-        Thread t = new Thread(() -> stampAll(cancel, progress), "burp-dedupe-history-stamper");
+        Thread t = new Thread(() -> stampAll(cancel, progress), "yentra-history-stamper");
         t.setDaemon(true);
         t.start();
         return t;
     }
 
     public enum RevertMode {
-        /** Remove our [DEDUPE] note prefix only. Leave highlight alone. */
+        /** Remove our [YENTRA] note prefix only. Leave highlight alone. */
         NOTES_ONLY,
         /** Clear highlight on rows whose notes are ours. Leave notes alone. */
         HIGHLIGHTS_ONLY,
@@ -148,7 +148,7 @@ public final class HistoryStamper {
 
     /**
      * Walk proxy history and undo our annotations. Conservatively, a row is "ours"
-     * iff its current notes start with our {@code [DEDUPE]} prefix — that prevents
+     * iff its current notes start with our {@code [YENTRA]} prefix — that prevents
      * us from wiping highlights set by other extensions on rows we never touched.
      */
     public void revertAll(RevertMode mode, AtomicBoolean cancel, Progress progress) {
@@ -156,7 +156,7 @@ public final class HistoryStamper {
         try {
             history = api.proxy().history();
         } catch (RuntimeException e) {
-            api.logging().logToError("[burp-dedupe] failed to read proxy history: " + e);
+            api.logging().logToError("[yentra] failed to read proxy history: " + e);
             progress.onFinished(0, 0, 0, false);
             return;
         }
@@ -179,12 +179,12 @@ public final class HistoryStamper {
             }
             if (a == null) { skipped++; continue; }
             String notes = a.hasNotes() ? a.notes() : "";
-            boolean isOurs = notes != null && notes.startsWith(DedupeProxyHandler.NOTE_PREFIX);
+            boolean isOurs = notes != null && notes.startsWith(YentraProxyHandler.NOTE_PREFIX);
             if (!isOurs) { skipped++; }
             try {
                 boolean changed = false;
                 if (isOurs && (mode == RevertMode.NOTES_ONLY || mode == RevertMode.NOTES_AND_HIGHLIGHTS)) {
-                    String remainder = stripDedupeNote(notes);
+                    String remainder = stripYentraNote(notes);
                     a.setNotes(remainder);
                     changed = true;
                 }
@@ -194,7 +194,7 @@ public final class HistoryStamper {
                 }
                 if (changed) touched++;
             } catch (RuntimeException e) {
-                api.logging().logToError("[burp-dedupe] revert failed for entry "
+                api.logging().logToError("[yentra] revert failed for entry "
                         + entry.id() + ": " + e);
                 skipped++;
             }
@@ -206,7 +206,7 @@ public final class HistoryStamper {
     }
 
     public Thread revertAsync(RevertMode mode, AtomicBoolean cancel, Progress progress) {
-        Thread t = new Thread(() -> revertAll(mode, cancel, progress), "burp-dedupe-history-reverter");
+        Thread t = new Thread(() -> revertAll(mode, cancel, progress), "yentra-history-reverter");
         t.setDaemon(true);
         t.start();
         return t;

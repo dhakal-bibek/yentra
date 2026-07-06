@@ -1,4 +1,4 @@
-package burpdedupe.core;
+package yentra.core;
 
 /**
  * 128-bit signature key (two longs from a SHA-256 prefix). Compact and effectively

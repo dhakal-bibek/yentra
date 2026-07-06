@@ -1,4 +1,4 @@
-package burpdedupe.ui;
+package yentra.ui;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.Annotations;
@@ -9,11 +9,11 @@ import burp.api.montoya.organizer.OrganizerItem;
 import burp.api.montoya.ui.contextmenu.ContextMenuEvent;
 import burp.api.montoya.ui.contextmenu.ContextMenuItemsProvider;
 import burp.api.montoya.ui.contextmenu.InvocationType;
-import burpdedupe.core.DedupeEngine;
-import burpdedupe.core.HeaderOverrideSet;
-import burpdedupe.core.Signature;
-import burpdedupe.proxy.DedupeProxyHandler;
-import burpdedupe.proxy.HistoryStamper;
+import yentra.core.YentraEngine;
+import yentra.core.HeaderOverrideSet;
+import yentra.core.Signature;
+import yentra.proxy.YentraProxyHandler;
+import yentra.proxy.HistoryStamper;
 
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -36,26 +36,26 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
- * Adds a right-click "Dedupe" submenu to HTTP history (and any other context that
+ * Adds a right-click "Yentra" submenu to HTTP history (and any other context that
  * exposes selected request/responses).
  *
  * <p>The menu's single action filters the user's selection down to unique requests
  * by signature, optionally applies the user's header overrides, and ships each
  * result to Burp Organizer.
  *
- * <p>Why filter at click-time (instead of relying on the existing {@code [DEDUPE]}
+ * <p>Why filter at click-time (instead of relying on the existing {@code [YENTRA]}
  * notes): the user may have multi-selected before stamping ran, or stamps may have
  * been written under a different signature config. Recomputing against the current
  * config is the source of truth.
  */
-public final class DedupeContextMenu implements ContextMenuItemsProvider {
+public final class YentraContextMenu implements ContextMenuItemsProvider {
 
     private final MontoyaApi api;
-    private final DedupeEngine engine;
+    private final YentraEngine engine;
     private final HistoryStamper stamper;
     private final Supplier<HeaderOverrideSet> overridesSupplier;
 
-    public DedupeContextMenu(MontoyaApi api, DedupeEngine engine,
+    public YentraContextMenu(MontoyaApi api, YentraEngine engine,
                              HistoryStamper stamper,
                              Supplier<HeaderOverrideSet> overridesSupplier) {
         this.api = api;
@@ -77,9 +77,9 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
             return List.of();
         }
 
-        JMenu submenu = new JMenu("Dedupe");
+        JMenu submenu = new JMenu("Yentra");
 
-        JMenuItem liveUnique = new JMenuItem("Live unique window (auto-collects [DEDUPE] UNIQUE)");
+        JMenuItem liveUnique = new JMenuItem("Live unique window (auto-collects [YENTRA] UNIQUE)");
         liveUnique.addActionListener(e -> openLiveUnique());
         submenu.add(liveUnique);
 
@@ -117,17 +117,17 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
         Thread t = new Thread(() -> {
             // If none of the selected rows have been stamped yet, run a full stamp
             // pass over proxy history before doing anything else. That way the user
-            // can see the [DEDUPE] notes for the rows they just acted on (and the
+            // can see the [YENTRA] notes for the rows they just acted on (and the
             // rest of their history). If at least one selected row is already
             // stamped, assume the user knows the state and skip.
             if (needsInitialStamp(snapshot)) {
                 api.logging().logToOutput(
-                        "[burp-dedupe] no [DEDUPE] notes on selection — stamping history first");
+                        "[yentra] no [YENTRA] notes on selection — stamping history first");
                 AtomicBoolean cancel = new AtomicBoolean(false);
                 stamper.stampAll(cancel, new HistoryStamper.Progress() {
-                    public void onProgress(int done, int total, DedupeEngine.Result r) {}
+                    public void onProgress(int done, int total, YentraEngine.Result r) {}
                     public void onFinished(int totalProcessed, int stamped, int skipped, boolean cancelled) {
-                        api.logging().logToOutput("[burp-dedupe] pre-send stamp complete: "
+                        api.logging().logToOutput("[yentra] pre-send stamp complete: "
                                 + "processed=" + totalProcessed + " stamped=" + stamped
                                 + (skipped > 0 ? " skipped=" + skipped : ""));
                     }
@@ -138,7 +138,7 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
             // Montoya has no "collection" concept (Organizer is a flat list), so the
             // closest we can get to grouping is stamping the Notes column of each
             // new item with a shared batch label.
-            String batchLabel = "Dedupe @ " + LocalDateTime.now()
+            String batchLabel = "Yentra @ " + LocalDateTime.now()
                     .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
             Set<Integer> preexistingIds = snapshotOrganizerIds();
 
@@ -150,13 +150,13 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
             for (HttpRequestResponse rr : snapshot) {
                 if (rr == null || rr.request() == null) { skipped++; continue; }
 
-                // Honor existing [DEDUPE] stamps if present — they reflect the
+                // Honor existing [YENTRA] stamps if present — they reflect the
                 // engine's global view of history, which is more authoritative
                 // than re-deduping just the selection. If a row was marked DUPE
                 // earlier (because an identical request was seen first), we still
                 // want to skip it even though it might be the only one of its
                 // signature in *this particular* selection.
-                String existingVerdict = readDedupeVerdict(rr);
+                String existingVerdict = readYentraVerdict(rr);
                 if (existingVerdict != null) {
                     if (existingVerdict.startsWith("DUPE")
                             || existingVerdict.equals("SKIP")
@@ -173,7 +173,7 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
                 try {
                     sig = engine.signatureFor(rr.request(), rr.response());
                 } catch (RuntimeException ex) {
-                    api.logging().logToError("[burp-dedupe] signature failed: " + ex);
+                    api.logging().logToError("[yentra] signature failed: " + ex);
                     errors++;
                     continue;
                 }
@@ -187,7 +187,7 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
                     api.organizer().sendToOrganizer(req);
                     unique++;
                 } catch (RuntimeException ex) {
-                    api.logging().logToError("[burp-dedupe] organizer send failed: " + ex);
+                    api.logging().logToError("[yentra] organizer send failed: " + ex);
                     errors++;
                 }
             }
@@ -196,7 +196,7 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
 
             final int u = unique, d = dupes, s = skipped, er = errors, tg = tagged;
             SwingUtilities.invokeLater(() -> api.logging().logToOutput(
-                    "[burp-dedupe] sent to Organizer — unique=" + u
+                    "[yentra] sent to Organizer — unique=" + u
                             + " dupes-filtered=" + d
                             + (s > 0 ? " skipped=" + s : "")
                             + (er > 0 ? " errors=" + er : "")
@@ -204,15 +204,15 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
                                     ? " (overrides applied: " + overrides.size() + " header(s))"
                                     : "")
                             + " | tagged=" + tg + " as '" + batchLabel + "'"));
-        }, "burp-dedupe-organizer-send");
+        }, "yentra-organizer-send");
         t.setDaemon(true);
         t.start();
     }
 
     /**
      * Opens the <b>live</b> unique-requests window — it auto-collects every HTTP-history entry stamped
-     * {@code [DEDUPE] UNIQUE} and keeps updating as you browse (no selection needed). This is the
-     * Ctrl+9 target; the menu item and the Dedupe-tab button open it too.
+     * {@code [YENTRA] UNIQUE} and keeps updating as you browse (no selection needed). This is the
+     * Ctrl+9 target; the menu item and the Yentra-tab button open it too.
      */
     public void openLiveUnique() {
         SwingUtilities.invokeLater(() -> UniqueRequestsViewer.openLive(api));
@@ -224,17 +224,17 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
      * present the deduplicated set in our own window instead (see {@link UniqueRequestsViewer}).
      *
      * <p>Uniques are picked exactly as {@link #sendUniqueToOrganizer} picks what to send: an existing
-     * {@code [DEDUPE]} verdict wins (DUPE/SKIP/OVRF are dropped); otherwise the signature is recomputed
+     * {@code [YENTRA]} verdict wins (DUPE/SKIP/OVRF are dropped); otherwise the signature is recomputed
      * and only the first occurrence of each signature in the selection is kept.
      *
      * <p>Public because it's the shared target of both the right-click action and the <b>Ctrl+9</b>
-     * hot-key (registered in {@code BurpDedupeExtension}).
+     * hot-key (registered in {@code YentraExtension}).
      */
     public void showUniqueRequests(List<HttpRequestResponse> selected) {
         if (selected == null || selected.isEmpty()) {
             SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(null,
                     "Select one or more HTTP-history (or Site map) rows first.",
-                    "Dedupe — Unique requests", JOptionPane.INFORMATION_MESSAGE));
+                    "Yentra — Unique requests", JOptionPane.INFORMATION_MESSAGE));
             return;
         }
         List<HttpRequestResponse> snapshot = new ArrayList<>(selected);
@@ -247,18 +247,18 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
             for (HttpRequestResponse rr : snapshot) {
                 if (rr == null || rr.request() == null) { skipped++; continue; }
 
-                String verdict = readDedupeVerdict(rr);
+                String verdict = readYentraVerdict(rr);
                 if (verdict != null
                         && (verdict.startsWith("DUPE") || verdict.equals("SKIP") || verdict.equals("OVRF"))) {
                     dupes++; continue;
                 }
-                // UNIQUE stamp, or no stamp: recompute and dedupe within the selection.
+                // UNIQUE stamp, or no stamp: recompute and dedup within the selection.
                 // signatureFor() doesn't touch the engine's live counters.
                 Signature sig;
                 try {
                     sig = engine.signatureFor(rr.request(), rr.response());
                 } catch (RuntimeException ex) {
-                    api.logging().logToError("[burp-dedupe] signature failed: " + ex);
+                    api.logging().logToError("[yentra] signature failed: " + ex);
                     errors++; continue;
                 }
                 if (!seenLocal.add(sig)) { dupes++; continue; }
@@ -267,39 +267,39 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
 
             final int d = dupes, s = skipped, er = errors;
             SwingUtilities.invokeLater(() -> {
-                api.logging().logToOutput("[burp-dedupe] show unique — unique=" + uniques.size()
+                api.logging().logToOutput("[yentra] show unique — unique=" + uniques.size()
                         + " dupes=" + d + (s > 0 ? " skipped=" + s : "") + (er > 0 ? " errors=" + er : ""));
                 if (uniques.isEmpty()) {
                     JOptionPane.showMessageDialog(null, "No unique requests in the selection.",
-                            "Dedupe — Unique requests", JOptionPane.INFORMATION_MESSAGE);
+                            "Yentra — Unique requests", JOptionPane.INFORMATION_MESSAGE);
                     return;
                 }
                 new UniqueRequestsViewer(api, uniques);
             });
-        }, "burp-dedupe-show-unique");
+        }, "yentra-show-unique");
         t.setDaemon(true);
         t.start();
     }
 
     /**
      * Returns true if no row in the selection has been stamped by us yet. We treat
-     * a row as "stamped" iff its current notes start with {@code [DEDUPE]} — same
+     * a row as "stamped" iff its current notes start with {@code [YENTRA]} — same
      * heuristic used by {@code HistoryStamper.revertAll}, so we stay consistent
      * about what counts as "ours".
      */
     /**
      * Parse the dedupe verdict word from a row's notes. Returns {@code "UNIQUE"},
      * {@code "DUPE x42"} (with the count suffix preserved), {@code "SKIP"},
-     * {@code "OVRF"}, or {@code null} if no [DEDUPE] stamp is present.
+     * {@code "OVRF"}, or {@code null} if no [YENTRA] stamp is present.
      */
-    private static String readDedupeVerdict(HttpRequestResponse rr) {
+    private static String readYentraVerdict(HttpRequestResponse rr) {
         try {
             Annotations a = rr.annotations();
             if (a == null || !a.hasNotes()) return null;
             String notes = a.notes();
-            if (notes == null || !notes.startsWith(DedupeProxyHandler.NOTE_PREFIX)) return null;
-            // Format: "[DEDUPE] VERDICT[ | other notes]"
-            int start = DedupeProxyHandler.NOTE_PREFIX.length();
+            if (notes == null || !notes.startsWith(YentraProxyHandler.NOTE_PREFIX)) return null;
+            // Format: "[YENTRA] VERDICT[ | other notes]"
+            int start = YentraProxyHandler.NOTE_PREFIX.length();
             if (start >= notes.length() || notes.charAt(start) != ' ') return null;
             int sep = notes.indexOf(" | ", start);
             String verdict = (sep < 0 ? notes.substring(start + 1) : notes.substring(start + 1, sep)).trim();
@@ -316,7 +316,7 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
                 Annotations a = rr.annotations();
                 if (a == null || !a.hasNotes()) continue;
                 String notes = a.notes();
-                if (notes != null && notes.startsWith(DedupeProxyHandler.NOTE_PREFIX)) {
+                if (notes != null && notes.startsWith(YentraProxyHandler.NOTE_PREFIX)) {
                     return false;
                 }
             } catch (RuntimeException ignored) {
@@ -392,7 +392,7 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
                 } catch (RuntimeException ignored) {}
             }
         } catch (RuntimeException ex) {
-            api.logging().logToError("[burp-dedupe] organizer tag failed: " + ex);
+            api.logging().logToError("[yentra] organizer tag failed: " + ex);
         }
         return tagged;
     }
@@ -410,7 +410,7 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
         int answer = JOptionPane.showConfirmDialog(null,
                 "Exclude the following " + label + " from Target scope?\n\n"
                         + urls.stream().collect(Collectors.joining("\n")),
-                "Dedupe — Remove from scope", JOptionPane.OK_CANCEL_OPTION,
+                "Yentra — Remove from scope", JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.WARNING_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return;
 
@@ -420,10 +420,10 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
                 api.scope().excludeFromScope(url);
                 done++;
             } catch (RuntimeException ex) {
-                api.logging().logToError("[burp-dedupe] scope exclude failed for " + url + ": " + ex);
+                api.logging().logToError("[yentra] scope exclude failed for " + url + ": " + ex);
             }
         }
-        api.logging().logToOutput("[burp-dedupe] excluded " + done + " " + label + " from scope.");
+        api.logging().logToOutput("[yentra] excluded " + done + " " + label + " from scope.");
     }
 
     public static String scopeUrlFor(HttpRequest req, boolean hostOnly) {

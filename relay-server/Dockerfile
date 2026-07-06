@@ -8,6 +8,6 @@ RUN ./gradlew build -x test
 
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
-COPY --from=build /build/build/libs/burp-dedupe-*.jar burp-dedupe.jar
+COPY --from=build /build/build/libs/yentra-*.jar yentra.jar
 EXPOSE 8080
-ENTRYPOINT ["java", "-cp", "burp-dedupe.jar", "burpdedupe.liveshare.RelayServer", "8080"]
+ENTRYPOINT ["java", "-cp", "yentra.jar", "yentra.liveshare.RelayServer", "8080"]

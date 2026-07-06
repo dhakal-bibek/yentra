@@ -1,11 +1,11 @@
-package burpdedupe.ui;
+package yentra.ui;
 
 import burp.api.montoya.MontoyaApi;
-import burpdedupe.core.DedupeEngine;
-import burpdedupe.core.HeaderOverrideSet;
-import burpdedupe.core.SignatureConfig;
-import burpdedupe.proxy.HistoryStamper;
-import burpdedupe.proxy.UniqueFeed;
+import yentra.core.YentraEngine;
+import yentra.core.HeaderOverrideSet;
+import yentra.core.SignatureConfig;
+import yentra.proxy.HistoryStamper;
+import yentra.proxy.UniqueFeed;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -19,12 +19,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
-public final class DedupeTab {
+public final class YentraTab {
 
     private static final Pattern COMMA = Pattern.compile("\\s*,\\s*");
 
     private final MontoyaApi api;
-    private final DedupeEngine engine;
+    private final YentraEngine engine;
     private final AtomicBoolean enabled;
     private final AtomicBoolean colorize;
     private final AtomicBoolean preserveNotes;
@@ -65,7 +65,7 @@ public final class DedupeTab {
     private final AtomicBoolean stampCancel = new AtomicBoolean(false);
     private volatile Thread stampThread;
 
-    // Header override widgets (applied only by the right-click → Dedupe → Send unique to Organizer action)
+    // Header override widgets (applied only by the right-click → Yentra → Send unique to Organizer action)
     private final JCheckBox cbOverrideEnabled = new JCheckBox("Apply header overrides when sending to Organizer", true);
     private final JRadioButton rbReplaceOrAdd = new JRadioButton("Replace if present, add if missing", true);
     private final JRadioButton rbReplaceOnly = new JRadioButton("Replace only (don't add new headers)");
@@ -78,7 +78,7 @@ public final class DedupeTab {
 
     private final Component component;
 
-    public DedupeTab(MontoyaApi api, DedupeEngine engine,
+    public YentraTab(MontoyaApi api, YentraEngine engine,
                      AtomicBoolean enabled, AtomicBoolean colorize, AtomicBoolean preserveNotes,
                      HistoryStamper stamper) {
         this.api = api;
@@ -208,7 +208,7 @@ public final class DedupeTab {
                 "How to use:\n" +
                 "  1. Pick a preset that matches the vuln class you're hunting and hit Apply.\n" +
                 "  2. (Optional) Paste header overrides — these are applied only when sending to Organizer.\n" +
-                "  3. In HTTP history, select rows (any number — duplicates are fine), right-click → Dedupe → \"Send unique to Organizer\".\n" +
+                "  3. In HTTP history, select rows (any number — duplicates are fine), right-click → Yentra → \"Send unique to Organizer\".\n" +
                 "     • Only one request per unique signature is sent.\n" +
                 "     • Header overrides (if enabled) are applied to each request before it's sent.\n" +
                 "  4. In Organizer, right-click items → Extensions → whatever extension you want. It will see your overridden headers.\n\n" +
@@ -275,13 +275,13 @@ public final class DedupeTab {
         btnApply.addActionListener(e -> applyToEngine());
         btnReset.addActionListener(e -> {
             engine.reset();
-            api.logging().logToOutput("[burp-dedupe] stats reset");
+            api.logging().logToOutput("[yentra] stats reset");
             refreshStats();
         });
         cbEnabled.addActionListener(e -> {
             enabled.set(cbEnabled.isSelected());
             if (!cbEnabled.isSelected()) {
-                // Notes turned off → strip our [DEDUPE] prefix from existing rows.
+                // Notes turned off → strip our [YENTRA] prefix from existing rows.
                 // If colorize is also off, do both in one pass.
                 startRevert(cbColorize.isSelected()
                         ? HistoryStamper.RevertMode.NOTES_ONLY
@@ -333,8 +333,8 @@ public final class DedupeTab {
 
         // ── Behavior ──
         cbEnabled.setToolTipText("<html>Classify every new proxy response and stamp its <b>Notes</b> with a "
-                + "<code>[DEDUPE] UNIQUE</code> / <code>DUPE&nbsp;xN</code> verdict.<br>"
-                + "This is what the live unique view reads — keep it on. Unticking strips our [DEDUPE] notes "
+                + "<code>[YENTRA] UNIQUE</code> / <code>DUPE&nbsp;xN</code> verdict.<br>"
+                + "This is what the live unique view reads — keep it on. Unticking strips our [YENTRA] notes "
                 + "from history.</html>");
         cbColorize.setToolTipText("<html>Tint HTTP-history rows by verdict (yellow = unique, gray = dupe; "
                 + "attacker/victim ports get their own colours).<br>Unticking clears the highlights we added.</html>");
@@ -455,7 +455,7 @@ public final class DedupeTab {
                 .build();
         engine.updateConfig(next);
         engine.setSeenCap(((Number) spCap.getValue()).intValue());
-        api.logging().logToOutput("[burp-dedupe] config applied; seen-set cleared");
+        api.logging().logToOutput("[yentra] config applied; seen-set cleared");
         refreshStats();
     }
 
@@ -482,7 +482,7 @@ public final class DedupeTab {
         if (stampThread != null && stampThread.isAlive()) {
             // Don't trample an in-progress stamp/revert. The user can toggle again later
             // once it settles. Quietly skipping is the safest option.
-            api.logging().logToOutput("[burp-dedupe] revert skipped — a stamp/revert is in progress");
+            api.logging().logToOutput("[yentra] revert skipped — a stamp/revert is in progress");
             return;
         }
         stampCancel.set(false);
@@ -494,11 +494,11 @@ public final class DedupeTab {
             case NOTES_AND_HIGHLIGHTS -> "notes + highlights";
         };
         lblStampStatus.setText("Reverting " + label + "…");
-        api.logging().logToOutput("[burp-dedupe] reverting " + label + " on existing history");
+        api.logging().logToOutput("[yentra] reverting " + label + " on existing history");
 
         stampThread = stamper.revertAsync(mode, stampCancel, new HistoryStamper.Progress() {
             @Override
-            public void onProgress(int done, int total, DedupeEngine.Result lastResult) {
+            public void onProgress(int done, int total, YentraEngine.Result lastResult) {
                 SwingUtilities.invokeLater(() ->
                         lblStampStatus.setText("Reverting " + done + " / " + total + "…"));
             }
@@ -511,7 +511,7 @@ public final class DedupeTab {
                     lblStampStatus.setText(msg);
                     btnStampHistory.setEnabled(true);
                     btnCancelStamp.setEnabled(false);
-                    api.logging().logToOutput("[burp-dedupe] " + msg);
+                    api.logging().logToOutput("[yentra] " + msg);
                 });
             }
         });
@@ -525,11 +525,11 @@ public final class DedupeTab {
         btnStampHistory.setEnabled(false);
         btnCancelStamp.setEnabled(true);
         lblStampStatus.setText("Starting…");
-        api.logging().logToOutput("[burp-dedupe] stamping existing proxy history");
+        api.logging().logToOutput("[yentra] stamping existing proxy history");
 
         stampThread = stamper.runAsync(stampCancel, new HistoryStamper.Progress() {
             @Override
-            public void onProgress(int done, int total, DedupeEngine.Result lastResult) {
+            public void onProgress(int done, int total, YentraEngine.Result lastResult) {
                 SwingUtilities.invokeLater(() ->
                         lblStampStatus.setText("Stamping " + done + " / " + total + "…"));
             }
@@ -542,7 +542,7 @@ public final class DedupeTab {
                     lblStampStatus.setText(msg);
                     btnStampHistory.setEnabled(true);
                     btnCancelStamp.setEnabled(false);
-                    api.logging().logToOutput("[burp-dedupe] " + msg);
+                    api.logging().logToOutput("[yentra] " + msg);
                     refreshStats();
                 });
             }
@@ -551,7 +551,7 @@ public final class DedupeTab {
 
     private JPanel buildOverridesPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
-        panel.setBorder(titled("Header overrides (used by right-click → Dedupe → Send unique to Organizer)"));
+        panel.setBorder(titled("Header overrides (used by right-click → Yentra → Send unique to Organizer)"));
 
         ButtonGroup modeGroup = new ButtonGroup();
         modeGroup.add(rbReplaceOrAdd);
@@ -614,14 +614,14 @@ public final class DedupeTab {
         }
         if (!errors.isEmpty()) {
             status += " (" + errors.size() + " warning(s), see logs)";
-            for (String err : errors) api.logging().logToOutput("[burp-dedupe] override: " + err);
+            for (String err : errors) api.logging().logToOutput("[yentra] override: " + err);
         }
         lblOverrideStatus.setText(status);
         // Don't log on every keystroke — only when count or enabled flag actually changes.
         boolean enabledNow = cbOverrideEnabled.isSelected();
         int countNow = next.size();
         if (enabledNow != lastLoggedEnabled || countNow != lastLoggedCount) {
-            api.logging().logToOutput("[burp-dedupe] header overrides updated: "
+            api.logging().logToOutput("[yentra] header overrides updated: "
                     + countNow + " header(s), enabled=" + enabledNow);
             lastLoggedEnabled = enabledNow;
             lastLoggedCount = countNow;

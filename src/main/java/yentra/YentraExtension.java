@@ -1,4 +1,4 @@
-package burpdedupe;
+package yentra;
 
 import burp.api.montoya.BurpExtension;
 import burp.api.montoya.MontoyaApi;
@@ -6,17 +6,17 @@ import burp.api.montoya.core.Registration;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.ui.hotkey.HotKeyContext;
 import burp.api.montoya.ui.hotkey.HotKeyHandler;
-import burpdedupe.core.DedupeEngine;
-import burpdedupe.core.SignatureConfig;
-import burpdedupe.liveshare.LiveShareTab;
-import burpdedupe.proxy.DedupeProxyHandler;
-import burpdedupe.proxy.HistoryStamper;
-import burpdedupe.proxy.PortHighlightHandler;
-import burpdedupe.proxy.UniqueFeed;
-import burpdedupe.ui.BodyOnlyResponseEditor;
-import burpdedupe.ui.DedupeContextMenu;
-import burpdedupe.ui.DedupeTab;
-import burpdedupe.ui.UniqueRequestsViewer;
+import yentra.core.YentraEngine;
+import yentra.core.SignatureConfig;
+import yentra.liveshare.LiveShareTab;
+import yentra.proxy.YentraProxyHandler;
+import yentra.proxy.HistoryStamper;
+import yentra.proxy.PortHighlightHandler;
+import yentra.proxy.UniqueFeed;
+import yentra.ui.BodyOnlyResponseEditor;
+import yentra.ui.YentraContextMenu;
+import yentra.ui.YentraTab;
+import yentra.ui.UniqueRequestsViewer;
 
 import java.util.function.BiConsumer;
 
@@ -24,43 +24,43 @@ import javax.swing.SwingUtilities;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class BurpDedupeExtension implements BurpExtension {
+public class YentraExtension implements BurpExtension {
 
     @Override
     public void initialize(MontoyaApi api) {
-        api.extension().setName("DedupeAI");
+        api.extension().setName("Yentra");
 
-        DedupeEngine engine = new DedupeEngine(api, SignatureConfig.forPreset(SignatureConfig.Preset.DEFAULT));
+        YentraEngine engine = new YentraEngine(api, SignatureConfig.forPreset(SignatureConfig.Preset.DEFAULT));
         AtomicBoolean enabled = new AtomicBoolean(true);
         AtomicBoolean colorize = new AtomicBoolean(true);
         AtomicBoolean preserveNotes = new AtomicBoolean(true);
 
-        // In-memory live feed: the proxy handler publishes every UNIQUE straight to the "Dedupe Live"
-        // tab, so the tab no longer depends on re-reading [DEDUPE] notes back out of Proxy history.
+        // In-memory live feed: the proxy handler publishes every UNIQUE straight to the "Yentra Live"
+        // tab, so the tab no longer depends on re-reading [YENTRA] notes back out of Proxy history.
         UniqueFeed liveFeed = new UniqueFeed();
 
-        DedupeProxyHandler proxyHandler = new DedupeProxyHandler(api, engine, enabled, colorize, preserveNotes, liveFeed);
+        YentraProxyHandler proxyHandler = new YentraProxyHandler(api, engine, enabled, colorize, preserveNotes, liveFeed);
         api.proxy().registerResponseHandler(proxyHandler);
 
         // Port-based highlighting + header injection (attacker/victim tagging by listener port).
         api.proxy().registerRequestHandler(new PortHighlightHandler(api));
         PortHighlightHandler.PORT_RULES.forEach((port, rule) ->
-                api.logging().logToOutput("[burp-dedupe] port " + port + " -> unique="
+                api.logging().logToOutput("[yentra] port " + port + " -> unique="
                         + rule.uniqueColor().displayName() + " dupe=" + rule.dupeColor().displayName()
                         + " " + rule.headers()));
 
         HistoryStamper stamper = new HistoryStamper(api, engine, colorize, preserveNotes);
 
         SwingUtilities.invokeLater(() -> {
-            DedupeTab tab = new DedupeTab(api, engine, enabled, colorize, preserveNotes, stamper);
-            api.userInterface().registerSuiteTab("Dedupe", tab.component());
+            YentraTab tab = new YentraTab(api, engine, enabled, colorize, preserveNotes, stamper);
+            api.userInterface().registerSuiteTab("Yentra", tab.component());
 
             // Live unique history as its own always-on Burp tab (no pop-up needed; Ctrl+9 still works).
-            api.userInterface().registerSuiteTab("Dedupe Live", DedupeTab.liveUniqueComponent(api, liveFeed));
+            api.userInterface().registerSuiteTab("Yentra Live", YentraTab.liveUniqueComponent(api, liveFeed));
 
             // Live Share: host a server or connect to a friend to share requests in real time.
             LiveShareTab shareTab = new LiveShareTab(api, liveFeed);
-            api.userInterface().registerSuiteTab("Dedupe Share", shareTab.component());
+            api.userInterface().registerSuiteTab("Yentra Share", shareTab.component());
             UniqueRequestsViewer.setShareHandler((rr, caption) -> shareTab.shareImmediately(rr, caption));
 
             // Tear down server/client connections on extension unload.
@@ -69,7 +69,7 @@ public class BurpDedupeExtension implements BurpExtension {
                 UniqueRequestsViewer.setAutoShare(false);
             });
 
-            DedupeContextMenu contextMenu = new DedupeContextMenu(api, engine, stamper, tab::currentOverrides);
+            YentraContextMenu contextMenu = new YentraContextMenu(api, engine, stamper, tab::currentOverrides);
             api.userInterface().registerContextMenuItemsProvider(contextMenu);
 
             // "Body Only" response tab — strips headers + JSON XSSI guards and pretty-renders the body
@@ -78,7 +78,7 @@ public class BurpDedupeExtension implements BurpExtension {
 
             // Ctrl+9 (in Proxy HTTP history or the Site map): if rows are selected (e.g. Ctrl+A),
             // open the unique requests from that selection; with nothing selected, fall back to the
-            // LIVE window that auto-collects every [DEDUPE] UNIQUE row.
+            // LIVE window that auto-collects every [YENTRA] UNIQUE row.
             HotKeyHandler launchLiveUnique = event -> {
                 List<HttpRequestResponse> selected = event.selectedRequestResponses();
                 if (selected != null && !selected.isEmpty()) {
@@ -105,10 +105,10 @@ public class BurpDedupeExtension implements BurpExtension {
         });
 
         api.extension().registerUnloadingHandler(() ->
-                api.logging().logToOutput("[burp-dedupe] unloaded"));
+                api.logging().logToOutput("[yentra] unloaded"));
 
-        api.logging().logToOutput("[burp-dedupe] loaded. Default preset: " + engine.config().preset);
-        api.logging().logToOutput("[burp-dedupe] BUILD: live-push feed enabled — Dedupe Live receives UNIQUEs "
+        api.logging().logToOutput("[yentra] loaded. Default preset: " + engine.config().preset);
+        api.logging().logToOutput("[yentra] BUILD: live-push feed enabled — Yentra Live receives UNIQUEs "
                 + "directly from the proxy handler (history poll is back-fill only).");
     }
 

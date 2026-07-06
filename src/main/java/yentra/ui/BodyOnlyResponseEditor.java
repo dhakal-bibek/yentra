@@ -1,4 +1,4 @@
-package burpdedupe.ui;
+package yentra.ui;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.HttpRequestResponse;
@@ -9,7 +9,7 @@ import burp.api.montoya.ui.editor.HttpResponseEditor;
 import burp.api.montoya.ui.editor.extension.EditorCreationContext;
 import burp.api.montoya.ui.editor.extension.ExtensionProvidedHttpResponseEditor;
 import burp.api.montoya.ui.editor.extension.HttpResponseEditorProvider;
-import burpdedupe.core.JsonPretty;
+import yentra.core.JsonPretty;
 
 import java.awt.Component;
 import java.nio.charset.StandardCharsets;
@@ -89,7 +89,7 @@ public final class BodyOnlyResponseEditor implements ExtensionProvidedHttpRespon
                     "HTTP/1.1 200 OK\r\nContent-Type: " + contentType + "\r\nContent-Length: " + len
                             + "\r\n\r\n" + body));
         } catch (RuntimeException e) {
-            api.logging().logToError("[burp-dedupe] Body Only render failed: " + e);
+            api.logging().logToError("[yentra] Body Only render failed: " + e);
             inner.setResponse(resp);   // fall back to the raw response rather than a blank tab
         }
     }

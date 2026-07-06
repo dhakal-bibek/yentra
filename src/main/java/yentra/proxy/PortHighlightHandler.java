@@ -1,4 +1,4 @@
-package burpdedupe.proxy;
+package yentra.proxy;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.Annotations;
@@ -8,7 +8,7 @@ import burp.api.montoya.proxy.http.InterceptedRequest;
 import burp.api.montoya.proxy.http.ProxyRequestHandler;
 import burp.api.montoya.proxy.http.ProxyRequestReceivedAction;
 import burp.api.montoya.proxy.http.ProxyRequestToBeSentAction;
-import burpdedupe.core.DedupeEngine;
+import yentra.core.YentraEngine;
 
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -65,17 +65,17 @@ public final class PortHighlightHandler implements ProxyRequestHandler {
         this.api = api;
     }
 
-    // ── Highlight colour policy (called by DedupeProxyHandler + HistoryStamper) ──
+    // ── Highlight colour policy (called by YentraProxyHandler + HistoryStamper) ──
 
     /**
      * The row colour for a verdict on a given listener port: the port rule's
      * unique/dupe colour if one exists, otherwise the default dedupe colour.
      */
-    public static HighlightColor colorFor(int port, DedupeEngine.Verdict verdict) {
+    public static HighlightColor colorFor(int port, YentraEngine.Verdict verdict) {
         PortRule rule = PORT_RULES.get(port);
         if (rule != null) {
-            if (verdict == DedupeEngine.Verdict.UNIQUE) return rule.uniqueColor();
-            if (verdict == DedupeEngine.Verdict.DUPE)   return rule.dupeColor();
+            if (verdict == YentraEngine.Verdict.UNIQUE) return rule.uniqueColor();
+            if (verdict == YentraEngine.Verdict.DUPE)   return rule.dupeColor();
         }
         return switch (verdict) {
             case UNIQUE   -> DEFAULT_UNIQUE;
@@ -86,7 +86,7 @@ public final class PortHighlightHandler implements ProxyRequestHandler {
     }
 
     /** Same, parsing the port from a proxy listener interface like "127.0.0.1:8082". */
-    public static HighlightColor colorFor(String listenerInterface, DedupeEngine.Verdict verdict) {
+    public static HighlightColor colorFor(String listenerInterface, YentraEngine.Verdict verdict) {
         return colorFor(parsePort(listenerInterface), verdict);
     }
 
@@ -140,7 +140,7 @@ public final class PortHighlightHandler implements ProxyRequestHandler {
             return ProxyRequestReceivedAction.continueWith(modified, annotations);
         } catch (RuntimeException e) {
             // Never let a bug here block traffic.
-            api.logging().logToError("[burp-dedupe] port highlight failed: " + e);
+            api.logging().logToError("[yentra] port highlight failed: " + e);
             return ProxyRequestReceivedAction.continueWith(request);
         }
     }

@@ -1,4 +1,4 @@
-package burpdedupe.liveshare;
+package yentra.liveshare;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.Annotations;
@@ -41,7 +41,7 @@ public class ShareServer {
         acceptThread = new Thread(this::acceptLoop, "liveshare-accept");
         acceptThread.setDaemon(true);
         acceptThread.start();
-        api.logging().logToOutput("[burp-dedupe] Live Share server started on port " + port);
+        api.logging().logToOutput("[yentra] Live Share server started on port " + port);
     }
 
     public synchronized void stop() {
@@ -50,7 +50,7 @@ public class ShareServer {
         clients.clear();
         try { if (serverSocket != null) serverSocket.close(); } catch (IOException ignored) {}
         if (acceptThread != null) acceptThread.interrupt();
-        api.logging().logToOutput("[burp-dedupe] Live Share server stopped");
+        api.logging().logToOutput("[yentra] Live Share server stopped");
         if (onClientChange != null) onClientChange.run();
     }
 
@@ -128,12 +128,12 @@ public class ShareServer {
                 Thread t = new Thread(h, "liveshare-client-" + s.getPort());
                 t.setDaemon(true);
                 t.start();
-                api.logging().logToOutput("[burp-dedupe] Live Share client connected: "
+                api.logging().logToOutput("[yentra] Live Share client connected: "
                         + s.getRemoteSocketAddress());
                 if (onClientChange != null) onClientChange.run();
             } catch (IOException e) {
                 if (running) {
-                    api.logging().logToError("[burp-dedupe] accept failed: " + e);
+                    api.logging().logToError("[yentra] accept failed: " + e);
                 }
             }
         }
@@ -205,13 +205,13 @@ public class ShareServer {
             } catch (EOFException | SocketException ignored) {
             } catch (IOException e) {
                 if (running) {
-                    api.logging().logToError("[burp-dedupe] client handler: " + e);
+                    api.logging().logToError("[yentra] client handler: " + e);
                 }
             } finally {
                 close();
                 clients.remove(this);
                 if (onClientChange != null) onClientChange.run();
-                api.logging().logToOutput("[burp-dedupe] Live Share client disconnected");
+                api.logging().logToOutput("[yentra] Live Share client disconnected");
             }
         }
 

@@ -1,4 +1,4 @@
-package burpdedupe.liveshare;
+package yentra.liveshare;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.Annotations;
@@ -11,8 +11,8 @@ import burp.api.montoya.http.message.responses.HttpResponse;
 import burp.api.montoya.ui.editor.EditorOptions;
 import burp.api.montoya.ui.editor.HttpRequestEditor;
 import burp.api.montoya.ui.editor.HttpResponseEditor;
-import burpdedupe.proxy.UniqueFeed;
-import burpdedupe.ui.UniqueRequestsViewer;
+import yentra.proxy.UniqueFeed;
+import yentra.ui.UniqueRequestsViewer;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -181,7 +181,7 @@ public class LiveShareTab {
         header.add(Box.createVerticalStrut(4));
 
         // Status hint
-        JLabel hint = new JLabel("When connected + auto-share on, new uniques in Dedupe Live are sent to peers.");
+        JLabel hint = new JLabel("When connected + auto-share on, new uniques in Yentra Live are sent to peers.");
         hint.setFont(hint.getFont().deriveFont(Font.PLAIN, 10f));
         hint.setForeground(Color.GRAY);
         hint.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -204,7 +204,7 @@ public class LiveShareTab {
         shareBtn.setToolTipText("Share the request in the editor above with all connected peers");
         shareBtn.addActionListener(e -> shareCurrentRequest());
 
-        autoShareCb.setToolTipText("<html>When connected, every new [DEDUPE] UNIQUE request in Dedupe Live is "
+        autoShareCb.setToolTipText("<html>When connected, every new [YENTRA] UNIQUE request in Yentra Live is "
                 + "automatically forwarded to peers. Untick to share manually only.</html>");
         autoShareCb.addItemListener(e -> {
             UniqueRequestsViewer.setAutoShare(autoShareCb.isSelected() && isAnyConnectionActive());
@@ -301,16 +301,16 @@ public class LiveShareTab {
                     if (mapper.addMapping()) {
                         publicIp = mapper.publicIp();
                         extra = "  UPnP: " + (publicIp != null ? publicIp : "ok");
-                        api.logging().logToOutput("[burp-dedupe] UPnP port " + fPort + " forwarded"
+                        api.logging().logToOutput("[yentra] UPnP port " + fPort + " forwarded"
                                 + (publicIp != null ? " → public IP " + publicIp : ""));
                     } else {
-                        api.logging().logToOutput("[burp-dedupe] UPnP not available — "
+                        api.logging().logToOutput("[yentra] UPnP not available — "
                                 + "friend needs LAN access or port forwarding");
                     }
 
                     // Start SSH tunnel if the user opted in (works across NAT without UPnP)
                     if (useSshTunnelCb.isSelected()) {
-                        api.logging().logToOutput("[burp-dedupe] Starting SSH tunnel via serveo.net…");
+                        api.logging().logToOutput("[yentra] Starting SSH tunnel via serveo.net…");
                         SwingUtilities.invokeLater(() ->
                                 sshStatusLabel.setText("Starting SSH tunnel via serveo.net…"));
                         SshTunnel tunnel = new SshTunnel(fPort);
@@ -321,7 +321,7 @@ public class LiveShareTab {
                             if (tunnel.await(20)) {
                                 String addr = tunnel.publicAddress();
                                 if (addr != null) {
-                                    api.logging().logToOutput("[burp-dedupe] SSH tunnel ready: " + addr);
+                                    api.logging().logToOutput("[yentra] SSH tunnel ready: " + addr);
                                     SwingUtilities.invokeLater(() -> {
                                         sshStatusLabel.setText("Public: " + addr);
                                         sshStatusLabel.setForeground(new Color(0, 128, 0));
@@ -365,11 +365,11 @@ public class LiveShareTab {
                         connectPortField.setEnabled(false);
                         enableSharing();
                         if (fPublicIp != null) {
-                            api.logging().logToOutput("[burp-dedupe] Share this IP with your friend: " + fPublicIp);
+                            api.logging().logToOutput("[yentra] Share this IP with your friend: " + fPublicIp);
                         }
                     });
                 } catch (Exception ex) {
-                    api.logging().logToError("[burp-dedupe] server start failed: " + ex);
+                    api.logging().logToError("[yentra] server start failed: " + ex);
                     SwingUtilities.invokeLater(() -> {
                         serverStatus.setText("Failed: " + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
                         serverStatus.setForeground(Color.RED);
@@ -442,7 +442,7 @@ public class LiveShareTab {
                         && ex.getMessage().contains("Connection refused"))
                         ? "Connection refused"
                         : "Failed: " + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
-                api.logging().logToError("[burp-dedupe] connect failed: " + ex);
+                api.logging().logToError("[yentra] connect failed: " + ex);
                 SwingUtilities.invokeLater(() -> {
                     clientStatus.setText(failMsg);
                     clientStatus.setForeground(Color.RED);
@@ -509,7 +509,7 @@ public class LiveShareTab {
                     });
                 }
             } catch (Exception ex) {
-                api.logging().logToError("[burp-dedupe] relay connect failed: " + ex);
+                api.logging().logToError("[yentra] relay connect failed: " + ex);
                 SwingUtilities.invokeLater(() -> {
                     relayStatus.setText("Failed: " + ex.getMessage());
                     relayStatus.setForeground(Color.RED);
@@ -555,7 +555,7 @@ public class LiveShareTab {
             }
         } catch (RuntimeException ignored) {}
 
-        // Push into the Dedupe Live view so the receiver sees it in their live log,
+        // Push into the Yentra Live view so the receiver sees it in their live log,
         // with a distinct colour so shared requests are visually separate from local ones.
         // Preserve the sender's notes so the Notes column shows the verdict + role tag.
         if (liveFeed != null) {
@@ -592,9 +592,9 @@ public class LiveShareTab {
                 // Logger: send via Burp's HTTP client — Logger's "capture by tool" picks this up.
                 try {
                     api.http().sendRequest(fReq);
-                    api.logging().logToOutput("[burp-dedupe] Shared request → Logger: " + fCaption);
+                    api.logging().logToOutput("[yentra] Shared request → Logger: " + fCaption);
                 } catch (RuntimeException ex) {
-                    api.logging().logToError("[burp-dedupe] Re-issue to Logger failed: " + ex.getMessage());
+                    api.logging().logToError("[yentra] Re-issue to Logger failed: " + ex.getMessage());
                 }
                 // Proxy HTTP history: send through the local proxy listener.
                 try {
@@ -602,15 +602,15 @@ public class LiveShareTab {
                     try { pPort = Integer.parseInt(proxyPortField.getText().trim()); }
                     catch (NumberFormatException ex) { pPort = 8080; }
                     reissueThroughProxy(fReq, pPort);
-                    api.logging().logToOutput("[burp-dedupe] Shared request → Proxy history: " + fCaption);
+                    api.logging().logToOutput("[yentra] Shared request → Proxy history: " + fCaption);
                 } catch (RuntimeException ex) {
-                    api.logging().logToError("[burp-dedupe] Re-issue to proxy history failed: " + ex.getMessage());
+                    api.logging().logToError("[yentra] Re-issue to proxy history failed: " + ex.getMessage());
                 }
             });
             if (queueBefore >= 50) {
                 long dropped = reissueDropped.incrementAndGet();
                 if (dropped % 10 == 1) {
-                    api.logging().logToOutput("[burp-dedupe] Re-issue queue full — dropped " + dropped + " shared request(s).");
+                    api.logging().logToOutput("[yentra] Re-issue queue full — dropped " + dropped + " shared request(s).");
                 }
             }
         }
@@ -619,7 +619,7 @@ public class LiveShareTab {
     private void enableSharing() {
         updateShareButton();
         UniqueRequestsViewer.setAutoShare(autoShareCb.isSelected());
-        api.logging().logToOutput("[burp-dedupe] Live Share active — auto-sharing "
+        api.logging().logToOutput("[yentra] Live Share active — auto-sharing "
                 + (autoShareCb.isSelected() ? "ON" : "OFF") + ".");
     }
 
@@ -640,7 +640,7 @@ public class LiveShareTab {
         if (relayClient != null) { relayClient.disconnect(); relayClient = null; }
         UniqueRequestsViewer.setAutoShare(false);
         updateShareButton();
-        api.logging().logToOutput("[burp-dedupe] Live Share stopped.");
+        api.logging().logToOutput("[yentra] Live Share stopped.");
     }
 
     private void onServerActivity() {
@@ -739,7 +739,7 @@ public class LiveShareTab {
                 sent = true;
             }
             if (sent && logIt) {
-                api.logging().logToOutput("[burp-dedupe] Shared: " + caption);
+                api.logging().logToOutput("[yentra] Shared: " + caption);
             }
         }, "liveshare-send");
         t.setDaemon(true);
@@ -815,10 +815,10 @@ public class LiveShareTab {
             try {
                 java.net.http.HttpResponse<byte[]> resp = client.send(jreq,
                         java.net.http.HttpResponse.BodyHandlers.ofByteArray());
-                api.logging().logToOutput("[burp-dedupe] Proxy re-issue: " + request.method() + " "
+                api.logging().logToOutput("[yentra] Proxy re-issue: " + request.method() + " "
                         + request.url() + " -> " + resp.statusCode());
             } catch (java.net.http.HttpTimeoutException ignored) {
-                api.logging().logToOutput("[burp-dedupe] Proxy re-issue timed out (15s): " + request.url());
+                api.logging().logToOutput("[yentra] Proxy re-issue timed out (15s): " + request.url());
             }
         } catch (Exception e) {
             throw new RuntimeException("proxy re-issue failed: " + e.getMessage(), e);

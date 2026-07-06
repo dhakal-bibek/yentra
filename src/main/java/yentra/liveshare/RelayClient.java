@@ -1,4 +1,4 @@
-package burpdedupe.liveshare;
+package yentra.liveshare;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.Annotations;
@@ -137,7 +137,7 @@ public class RelayClient {
             conn.disconnect();
             return code == 200;
         } catch (Exception e) {
-            api.logging().logToError("[burp-dedupe] relay share failed: " + e.getMessage());
+            api.logging().logToError("[yentra] relay share failed: " + e.getMessage());
             return false;
         }
     }
@@ -152,7 +152,7 @@ public class RelayClient {
             } catch (InterruptedException e) {
                 break;
             } catch (Exception e) {
-                api.logging().logToError("[burp-dedupe] relay poll error: " + e.getMessage());
+                api.logging().logToError("[yentra] relay poll error: " + e.getMessage());
                 try {
                     if (running.get()) {
                         Thread.sleep(Math.min(retryDelay, MAX_RETRY_DELAY_MS));
@@ -274,7 +274,7 @@ public class RelayClient {
 
             if (onReceive != null) onReceive.accept(rr, caption != null ? caption : "");
         } catch (Exception e) {
-            api.logging().logToError("[burp-dedupe] relay message parse error: " + e.getMessage());
+            api.logging().logToError("[yentra] relay message parse error: " + e.getMessage());
         }
     }
 

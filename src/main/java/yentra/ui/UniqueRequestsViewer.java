@@ -1,4 +1,4 @@
-package burpdedupe.ui;
+package yentra.ui;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.Annotations;
@@ -13,13 +13,14 @@ import burp.api.montoya.proxy.ProxyHttpRequestResponse;
 import burp.api.montoya.ui.editor.EditorOptions;
 import burp.api.montoya.ui.editor.HttpRequestEditor;
 import burp.api.montoya.ui.editor.HttpResponseEditor;
-import burpdedupe.core.JsonPretty;
-import burpdedupe.proxy.DedupeProxyHandler;
-import burpdedupe.proxy.UniqueFeed;
+import yentra.core.JsonPretty;
+import yentra.proxy.YentraProxyHandler;
+import yentra.proxy.UniqueFeed;
 
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.InputMap;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -27,6 +28,7 @@ import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -38,6 +40,8 @@ import javax.swing.JSplitPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.JToggleButton;
+import javax.swing.JWindow;
 import javax.swing.ListSelectionModel;
 import javax.swing.RowFilter;
 import javax.swing.SwingConstants;
@@ -64,6 +68,7 @@ import java.awt.Toolkit;
 import java.awt.AWTEvent;
 import java.awt.KeyboardFocusManager;
 import java.awt.event.ActionEvent;
+import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -92,7 +97,7 @@ import java.util.regex.PatternSyntaxException;
 /**
  * A standalone window that lists <em>only the unique</em> requests from a selection,
  * styled to mirror Burp's HTTP-history table (same kind of columns, a Notes column
- * carrying our {@code [DEDUPE] …} verdict + {@code [attacker]/[victim] port N} tag, and
+ * carrying our {@code [YENTRA] …} verdict + {@code [attacker]/[victim] port N} tag, and
  * rows tinted by their Burp highlight colour). Read-only request/response viewers sit
  * beneath the table.
  *
@@ -118,9 +123,9 @@ public final class UniqueRequestsViewer {
     private final JPanel root;           // the content panel; becomes the tab body when embedded
     private final TableRowSorter<UniqueTableModel> sorter;
     private final JTextField filterField = new JTextField(26);
-    private final JCheckBox regexBox = new JCheckBox("regex");
-    private final JCheckBox inScopeBox = new JCheckBox("In-scope only");
-    private final JCheckBox sharedOnlyBox = new JCheckBox("Shared only");
+    private final JToggleButton regexChip = new PremiumChip(".* regex", new Color(0x7C, 0x5C, 0xF3));
+    private final JToggleButton scopeChip = new PremiumChip("In-scope", new Color(0x12, 0xB7, 0x6A));
+    private final JToggleButton sharedChip = new PremiumChip("Shared", new Color(0xF5, 0x9E, 0x0B));
     private final JLabel status = new JLabel(" ");
     /** Live mode: proxy ids already collected, by either path (so neither push nor poll re-adds one). Concurrent: written from the proxy thread (push) and the poll thread. */
     private final Set<Integer> seenIds = ConcurrentHashMap.newKeySet();
@@ -167,6 +172,19 @@ public final class UniqueRequestsViewer {
 
     private static final boolean IS_MAC = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
 
+    private static final Color PREMIUM_BG       = new Color(0xF7, 0xF8, 0xFA);
+    private static final Color PREMIUM_SURFACE   = new Color(0xFF, 0xFF, 0xFF);
+    private static final Color PREMIUM_BORDER    = new Color(0xE2, 0xE5, 0xEA);
+    private static final Color PREMIUM_ACCENT    = new Color(0x4A, 0x6C, 0xF7);
+    private static final Color PREMIUM_ACCENT_BG = new Color(0xEE, 0xF1, 0xFE);
+    private static final Color PREMIUM_TEXT      = new Color(0x1A, 0x1D, 0x24);
+    private static final Color PREMIUM_MUTED     = new Color(0x88, 0x90, 0x9C);
+    private static final Color PREMIUM_SEND      = new Color(0x4A, 0x6C, 0xF7);
+    private static final Color PREMIUM_SEND_HOV  = new Color(0x39, 0x56, 0xD8);
+    private static final Color PREMIUM_DANGER    = new Color(0xE5, 0x48, 0x4D);
+    private static final Color PREMIUM_OK        = new Color(0x12, 0xB7, 0x6A);
+    private static final Color PREMIUM_WARN      = new Color(0xF5, 0x9E, 0x0B);
+
     /** Live export: mirror every collected unique request to a file Claude Code can read. */
     private final JCheckBox cbLiveExport = new JCheckBox("Live export → file", false);
     private Timer exportDebounce;
@@ -175,8 +193,11 @@ public final class UniqueRequestsViewer {
     private final java.util.List<RepeaterEntry> repeaterHistory = new ArrayList<>();
     private int historyPos = -1;
     private final JLabel responseInfo = new JLabel(" ");
-    private final JButton btnBack = new JButton("◀");
-    private final JButton btnForward = new JButton("▶");
+    private final JLabel resultCounter = new JLabel("");
+    private final JButton btnBack = new PremiumButton("◀", "nav");
+    private final JButton btnForward = new PremiumButton("▶", "nav");
+    private HttpRequest originalRequest;
+    private JWindow filterPopup;
 
     private record RepeaterEntry(HttpRequest request, HttpResponse response, long elapsedMs) {}
 
@@ -220,15 +241,19 @@ public final class UniqueRequestsViewer {
 
         JPanel responsePanel = new JPanel(new BorderLayout());
         responseInfo.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, Color.GRAY),
-                BorderFactory.createEmptyBorder(3, 8, 3, 8)));
-        responseInfo.setFont(responseInfo.getFont().deriveFont(Font.BOLD));
+                BorderFactory.createMatteBorder(0, 0, 1, 0, PREMIUM_BORDER),
+                BorderFactory.createEmptyBorder(5, 10, 5, 10)));
+        responseInfo.setFont(responseInfo.getFont().deriveFont(Font.BOLD, 12f));
+        responseInfo.setForeground(PREMIUM_TEXT);
+        responseInfo.setBackground(PREMIUM_BG);
+        responseInfo.setOpaque(true);
         responsePanel.add(responseInfo, BorderLayout.NORTH);
         responsePanel.add(responseEditor.uiComponent(), BorderLayout.CENTER);
 
         JSplitPane editors = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
                 requestEditor.uiComponent(), responsePanel);
         editors.setResizeWeight(0.5);
+        editors.setBorder(BorderFactory.createEmptyBorder());
 
         btnBack.setToolTipText("Back (Alt+Left)");
         btnBack.setEnabled(false);
@@ -239,6 +264,7 @@ public final class UniqueRequestsViewer {
         btnForward.addActionListener(e -> navigateHistory(1));
 
         JPanel editorPanel = new JPanel(new BorderLayout());
+        editorPanel.setBackground(PREMIUM_BG);
 
         KeyStroke altLeft = KeyStroke.getKeyStroke(KeyEvent.VK_LEFT, KeyEvent.ALT_DOWN_MASK);
         editorPanel.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(altLeft, "history-back");
@@ -251,42 +277,71 @@ public final class UniqueRequestsViewer {
             @Override public void actionPerformed(ActionEvent e) { navigateHistory(1); }
         });
 
-        JButton sendEdited = new JButton("Send ▶");
+        JButton sendEdited = new PremiumButton("Send ▶", "primary");
         sendEdited.setToolTipText("<html>Send (Cmd+Space / Ctrl+Space).<br>"
                 + (!IS_MAC ? "Also: Ctrl+Enter." : "")
                 + "</html>");
         sendEdited.addActionListener(e -> sendEditedRequest());
 
-        JButton cancelBtn = new JButton("Cancel");
-        cancelBtn.addActionListener(e -> cancelRequest());
+        JButton resetBtn = new PremiumButton("↺ Reset", "default");
+        resetBtn.setToolTipText("Reset the request to its original state (before editing).");
+        resetBtn.addActionListener(e -> resetRequest());
 
         JLabel targetLabel = new JLabel("Target: ");
         targetLabel.setFont(targetLabel.getFont().deriveFont(Font.PLAIN, 11f));
+        targetLabel.setForeground(PREMIUM_MUTED);
 
-        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 2));
+        JLabel shortcutHint = new JLabel("⌘Space / Ctrl+Space");
+        shortcutHint.setFont(shortcutHint.getFont().deriveFont(Font.PLAIN, 10f));
+        shortcutHint.setForeground(PREMIUM_MUTED);
+
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 3));
+        toolbar.setBackground(PREMIUM_BG);
         toolbar.add(btnBack);
         toolbar.add(btnForward);
-        toolbar.add(new JSeparator(SwingConstants.VERTICAL));
+        toolbar.add(Box.createHorizontalStrut(6));
         toolbar.add(sendEdited);
-        toolbar.add(Box.createHorizontalStrut(4));
-        toolbar.add(new JLabel("Cmd+Space / Ctrl+Space"));
-        toolbar.add(Box.createHorizontalStrut(12));
-        toolbar.add(cancelBtn);
-        toolbar.add(Box.createHorizontalStrut(12));
+        toolbar.add(Box.createHorizontalStrut(2));
+        toolbar.add(shortcutHint);
+        toolbar.add(Box.createHorizontalStrut(10));
+        toolbar.add(resetBtn);
+        toolbar.add(Box.createHorizontalStrut(10));
         toolbar.add(targetLabel);
-        toolbar.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
+        toolbar.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, PREMIUM_BORDER),
+                BorderFactory.createEmptyBorder(3, 6, 3, 6)));
 
         editorPanel.add(toolbar, BorderLayout.NORTH);
         editorPanel.add(editors, BorderLayout.CENTER);
         installSendKeys(editorPanel);
 
+        table.setRowHeight(28);
+        table.setSelectionBackground(PREMIUM_ACCENT_BG);
+        table.setSelectionForeground(PREMIUM_TEXT);
+        table.setGridColor(PREMIUM_BORDER);
+        table.setShowGrid(false);
+        table.setIntercellSpacing(new java.awt.Dimension(0, 0));
+        table.getTableHeader().setFont(table.getTableHeader().getFont().deriveFont(Font.BOLD, 11f));
+        table.getTableHeader().setBackground(PREMIUM_BG);
+        table.getTableHeader().setForeground(PREMIUM_MUTED);
+        table.getTableHeader().setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, PREMIUM_BORDER));
+
         JSplitPane main = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                 new JScrollPane(table), editorPanel);
         main.setResizeWeight(0.35);
+        main.setBorder(BorderFactory.createEmptyBorder());
+        main.setDividerSize(6);
 
-        status.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+        status.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, PREMIUM_BORDER),
+                BorderFactory.createEmptyBorder(5, 12, 5, 12)));
+        status.setFont(status.getFont().deriveFont(Font.PLAIN, 11f));
+        status.setForeground(PREMIUM_MUTED);
+        status.setBackground(PREMIUM_BG);
+        status.setOpaque(true);
 
         this.root = new JPanel(new BorderLayout());
+        root.setBackground(PREMIUM_BG);
         root.add(buildToolbar(), BorderLayout.NORTH);
         root.add(main, BorderLayout.CENTER);
         root.add(status, BorderLayout.SOUTH);
@@ -295,7 +350,7 @@ public final class UniqueRequestsViewer {
             // Parent pop-up windows to Burp's main frame (BApp Store guideline: SwingUtils.suiteFrame()),
             // as a modeless dialog so they ride with Burp across monitors instead of floating loose.
             java.awt.Frame owner = api.userInterface().swingUtils().suiteFrame();
-            this.frame = new JDialog(owner, "Dedupe — " + baseTitle + " (" + model.getRowCount() + ")", false);
+            this.frame = new JDialog(owner, "Yentra — " + baseTitle + " (" + model.getRowCount() + ")", false);
             frame.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
             frame.add(root);
             frame.setSize(1150, 760);
@@ -320,17 +375,17 @@ public final class UniqueRequestsViewer {
 
     /** Updates the pop-up window title with the live count; a no-op when embedded as a Burp tab. */
     private void refreshTitle() {
-        if (frame != null) frame.setTitle("Dedupe — " + baseTitle + " (" + model.getRowCount() + ")");
+        if (frame != null) frame.setTitle("Yentra — " + baseTitle + " (" + model.getRowCount() + ")");
     }
 
     private JPanel buildToolbar() {
-        JButton repeater = new JButton("Send to Repeater");
+        JButton repeater = new PremiumButton("Send to Repeater", "default");
         repeater.setToolTipText("Send the selected request(s) to new Repeater tabs (named by method + path).");
         repeater.addActionListener(e -> sendSelectedToRepeater());
 
-        JButton shareBtn = new JButton("Share");
+        JButton shareBtn = new PremiumButton("Share", "default");
         shareBtn.setToolTipText("<html>Share the selected request with connected peers.<br>"
-                + "Open the <b>Dedupe Share</b> tab, start a server or connect to a friend first.</html>");
+                + "Open the <b>Yentra Share</b> tab, start a server or connect to a friend first.</html>");
         shareBtn.addActionListener(e -> {
             List<HttpRequestResponse> sel = selectedRows();
             if (sel.isEmpty()) { status.setText("Select a request first."); return; }
@@ -342,29 +397,29 @@ public final class UniqueRequestsViewer {
                 handler.accept(rr, caption);
                 status.setText("Shared: " + caption);
             } else {
-                status.setText("No Live Share — open the Dedupe Share tab, start a server or connect to a friend.");
+                status.setText("No Live Share — open the Yentra Share tab, start a server or connect to a friend.");
             }
         });
 
-        JButton save = new JButton("Save request(s) for AI");
+        JButton save = new PremiumButton("Save for AI", "default");
         save.setToolTipText("Save the selected request(s) and their responses into one .http file "
                 + "for Claude Code / AI to read. Ctrl/Cmd- or Shift-click to select several.");
         save.addActionListener(e -> saveSelectedRequests());
 
-        JButton magic = new JButton("Magic Cookie");
+        JButton magic = new PremiumButton("Magic Cookie", "default");
         magic.setToolTipText("Resend the selected request(s) with your configured auth replacing the "
                 + "original Cookie / Authorization (and any header you list); everything else unchanged. "
                 + "Opens the results in a new window.");
         magic.addActionListener(e -> openMagicCookieDialog());
 
-        JButton matchReplace = new JButton("Match & Replace");
+        JButton matchReplace = new PremiumButton("Match & Replace", "default");
         matchReplace.setToolTipText("IDOR/BOLA: replace an id or token in the path/query, body, or both, "
                 + "then reissue the selected request(s) — watch the live results for an unexpected 200.");
         matchReplace.addActionListener(e -> openMatchReplaceDialog());
 
-        JButton clear = new JButton("Clear");
+        JButton clear = new PremiumButton("Clear", "danger");
         clear.setToolTipText("Empty this window — clears the collected rows. "
-                + "(In the live window, new [DEDUPE] UNIQUE requests keep arriving after.)");
+                + "(In the live window, new [YENTRA] UNIQUE requests keep arriving after.)");
         clear.addActionListener(e -> clearView());
 
         Path exportDir = exportDir();
@@ -373,72 +428,514 @@ public final class UniqueRequestsViewer {
                 + "• <b>selection.http</b> — your current selection, as you change it<br>"
                 + "Point Claude Code at either path. On by default in the live window; untick to stop.</html>");
         cbLiveExport.addActionListener(e -> { if (cbLiveExport.isSelected()) scheduleLiveExport(); });
-        api.logging().logToOutput("[burp-dedupe] live export dir: " + exportDir + " (live-unique.http, selection.http)");
+        api.logging().logToOutput("[yentra] live export dir: " + exportDir + " (live-unique.http, selection.http)");
 
-        filterField.setToolTipText("Filter by any text in the request (path, query, headers, body), the "
-                + "response body, or the columns (Host / Method / URL / Status / MIME / Notes). "
-                + "Plain substring; tick 'regex' for a case-insensitive regular expression.");
+        filterField.setToolTipText("<html><b>Bambda-style filter</b> — prefix tokens + plain text:<br>"
+                + "<b>m:GET</b> — method  |  <b>s:200</b> — status  |  <b>h:api</b> — host<br>"
+                + "<b>url:/path</b> — URL  |  <b>body:token</b> — resp body  |  <b>req:data</b> — req body<br>"
+                + "<b>hdr:Auth</b> — header  |  <b>mime:JSON</b> — MIME  |  <b>len:1024</b> — length<br>"
+                + "<b>notes:UNIQUE</b> — notes  |  <b>u:</b> — unique  |  <b>d:</b> — dupe  |  <b>skip:</b> — skip<br>"
+                + "<b>r:pattern</b> — regex  |  <b>>399</b> <b><=200</b> — status range<br>"
+                + "Plain text → substring across everything. Tokens combine with AND.</html>");
         filterField.getDocument().addDocumentListener(new DocumentListener() {
             @Override public void insertUpdate(DocumentEvent e) { applyFilter(); }
             @Override public void removeUpdate(DocumentEvent e) { applyFilter(); }
             @Override public void changedUpdate(DocumentEvent e) { applyFilter(); }
         });
-        regexBox.setToolTipText("Treat the filter text as a regular expression (case-insensitive).");
-        regexBox.addItemListener(e -> applyFilter());
-        inScopeBox.setToolTipText("Show only requests whose URL is in Burp's Target scope. "
-                + "Combines with the filter box; live rows are scoped as they arrive. "
-                + "(Toggle to re-apply after changing scope.)");
-        inScopeBox.addItemListener(e -> applyFilter());
+        filterField.putClientProperty("JTextField.placeholderText", "Search requests…");
+        filterField.putClientProperty("JTextField.showClearButton", true);
+        installFilterAutocomplete();
 
-        sharedOnlyBox.setToolTipText("Show only requests that arrived via Live Share from a peer. "
-                + "Combines with the other filters.");
-        sharedOnlyBox.addItemListener(e -> applyFilter());
+        JPanel filterChips = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        filterChips.setOpaque(false);
 
-        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+        regexChip.setToolTipText("Treat search as regular expression (case-insensitive).");
+        regexChip.addItemListener(e -> applyFilter());
+
+        scopeChip.setToolTipText("Show only requests in Target scope.");
+        scopeChip.addItemListener(e -> applyFilter());
+
+        sharedChip.setToolTipText("Show only requests from Live Share peers.");
+        sharedChip.addItemListener(e -> applyFilter());
+
+        filterChips.add(regexChip);
+        filterChips.add(scopeChip);
+        filterChips.add(sharedChip);
+
+        resultCounter.setFont(resultCounter.getFont().deriveFont(Font.PLAIN, 11f));
+        resultCounter.setForeground(PREMIUM_MUTED);
+        resultCounter.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 4));
+
+        JPanel filterBar = new JPanel(new BorderLayout(4, 0));
+        filterBar.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(PREMIUM_BORDER, 1, true),
+                BorderFactory.createEmptyBorder(3, 10, 3, 6)));
+        filterBar.setBackground(PREMIUM_SURFACE);
+        filterBar.add(filterField, BorderLayout.CENTER);
+        JPanel rightSide = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        rightSide.setOpaque(false);
+        rightSide.add(resultCounter);
+        rightSide.add(filterChips);
+        filterBar.add(rightSide, BorderLayout.EAST);
+        filterBar.setPreferredSize(new java.awt.Dimension(500, 34));
+
+        filterField.setBorder(BorderFactory.createEmptyBorder());
+        filterField.setFont(filterField.getFont().deriveFont(13f));
+        filterField.setBackground(filterBar.getBackground());
+        filterField.setForeground(PREMIUM_TEXT);
+
+        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 5));
+        bar.setBackground(PREMIUM_BG);
         bar.add(repeater);
         bar.add(shareBtn);
-        bar.add(inScopeBox);
-        bar.add(sharedOnlyBox);
         bar.add(save);
         bar.add(magic);
         bar.add(matchReplace);
         bar.add(clear);
         bar.add(cbLiveExport);
-        bar.add(new JLabel("    Filter:"));
-        bar.add(filterField);
-        bar.add(regexBox);
+        bar.add(Box.createHorizontalStrut(10));
+        bar.add(filterBar);
         return bar;
     }
 
-    /**
-     * Filters the table: optional <b>Shared only</b>, <b>In-scope only</b> gates,
-     * AND the text box, which matches across all columns — substring by default,
-     * regex when ticked, always case-insensitive. With none active, every row shows.
-     */
-    private void applyFilter() {
-        List<RowFilter<Object, Object>> filters = new ArrayList<>(3);
+    private static final class PremiumChip extends JToggleButton {
+        private final Color onColor;
+        private boolean hover;
+        private int hovered = 0;
 
-        if (sharedOnlyBox.isSelected()) {
-            filters.add(sharedRowFilter());
+        PremiumChip(String text, Color selectedColor) {
+            super(text);
+            this.onColor = selectedColor;
+            setFont(getFont().deriveFont(Font.PLAIN, 11f));
+            setMargin(new java.awt.Insets(0, 0, 0, 0));
+            setFocusPainted(false);
+            setBorderPainted(false);
+            setContentAreaFilled(false);
+            setOpaque(false);
+            setCursor(new java.awt.Cursor(java.awt.Cursor.HAND_CURSOR));
+            addMouseListener(new java.awt.event.MouseAdapter() {
+                @Override public void mouseEntered(java.awt.event.MouseEvent e) { hover = true; repaint(); }
+                @Override public void mouseExited(java.awt.event.MouseEvent e) { hover = false; repaint(); }
+            });
         }
 
-        if (inScopeBox.isSelected()) {
+        @Override protected void paintComponent(java.awt.Graphics g) {
+            java.awt.Graphics2D g2 = (java.awt.Graphics2D) g.create();
+            g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+            int w = getWidth(), h = getHeight();
+            int arc = h - 2;
+
+            if (isSelected()) {
+                g2.setColor(onColor);
+                g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
+                g2.setColor(Color.WHITE);
+            } else if (hover) {
+                g2.setColor(new Color(onColor.getRed(), onColor.getGreen(), onColor.getBlue(), 30));
+                g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
+                g2.setColor(onColor);
+                g2.drawRoundRect(0, 0, w - 1, h - 1, arc, arc);
+                g2.setColor(onColor);
+            } else {
+                g2.setColor(PREMIUM_SURFACE);
+                g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
+                g2.setColor(PREMIUM_BORDER);
+                g2.drawRoundRect(0, 0, w - 1, h - 1, arc, arc);
+                g2.setColor(PREMIUM_MUTED);
+            }
+
+            g2.setFont(getFont());
+            java.awt.FontMetrics fm = g2.getFontMetrics();
+            String text = getText();
+            int tw = fm.stringWidth(text);
+            int tx = (w - tw) / 2;
+            int ty = (h - fm.getHeight()) / 2 + fm.getAscent();
+            g2.drawString(text, tx, ty);
+            g2.dispose();
+        }
+
+        @Override public java.awt.Dimension getPreferredSize() {
+            java.awt.FontMetrics fm = getFontMetrics(getFont());
+            int tw = fm.stringWidth(getText());
+            return new java.awt.Dimension(tw + 24, 24);
+        }
+    }
+
+    private static void styleButton(JButton btn) {
+        btn.setFont(btn.getFont().deriveFont(Font.PLAIN, 12f));
+        btn.setMargin(new java.awt.Insets(0, 0, 0, 0));
+        btn.setFocusPainted(false);
+        btn.setBorderPainted(false);
+        btn.setContentAreaFilled(false);
+        btn.setOpaque(false);
+        btn.setForeground(PREMIUM_TEXT);
+        btn.setCursor(new java.awt.Cursor(java.awt.Cursor.HAND_CURSOR));
+    }
+
+    private static void styleSendButton(JButton btn) {
+        styleButton(btn);
+        btn.setFont(btn.getFont().deriveFont(Font.BOLD, 12f));
+    }
+
+    private static void styleNavButton(JButton btn) {
+        styleButton(btn);
+        btn.setFont(btn.getFont().deriveFont(Font.PLAIN, 15f));
+    }
+
+    private static final class PremiumButton extends JButton {
+        private final String type;
+        private boolean hover, pressed;
+
+        PremiumButton(String text, String type) {
+            super(text);
+            this.type = type;
+            setFont(getFont().deriveFont(Font.PLAIN, 12f));
+            setMargin(new java.awt.Insets(0, 0, 0, 0));
+            setFocusPainted(false);
+            setBorderPainted(false);
+            setContentAreaFilled(false);
+            setOpaque(false);
+            setCursor(new java.awt.Cursor(java.awt.Cursor.HAND_CURSOR));
+            addMouseListener(new java.awt.event.MouseAdapter() {
+                @Override public void mouseEntered(java.awt.event.MouseEvent e) { hover = true; repaint(); }
+                @Override public void mouseExited(java.awt.event.MouseEvent e) { hover = false; repaint(); }
+                @Override public void mousePressed(java.awt.event.MouseEvent e) { pressed = true; repaint(); }
+                @Override public void mouseReleased(java.awt.event.MouseEvent e) { pressed = false; repaint(); }
+            });
+        }
+
+        @Override protected void paintComponent(java.awt.Graphics g) {
+            java.awt.Graphics2D g2 = (java.awt.Graphics2D) g.create();
+            g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+            int w = getWidth(), h = getHeight();
+            int arc = 8;
+
+            Color bg, fg, border;
+            if (!isEnabled()) {
+                bg = PREMIUM_BG;
+                fg = new Color(0xC0, 0xC4, 0xCC);
+                border = PREMIUM_BORDER;
+            } else if (type.equals("primary")) {
+                bg = pressed ? PREMIUM_SEND_HOV : hover ? PREMIUM_SEND_HOV : PREMIUM_SEND;
+                fg = Color.WHITE;
+                border = bg;
+            } else if (type.equals("nav")) {
+                bg = pressed ? PREMIUM_ACCENT_BG : hover ? PREMIUM_ACCENT_BG : PREMIUM_SURFACE;
+                fg = pressed ? PREMIUM_ACCENT : hover ? PREMIUM_ACCENT : PREMIUM_MUTED;
+                border = hover ? PREMIUM_ACCENT : PREMIUM_BORDER;
+            } else if (type.equals("danger")) {
+                bg = pressed ? new Color(0xC0, 0x3A, 0x3F) : hover ? PREMIUM_DANGER : PREMIUM_SURFACE;
+                fg = hover ? Color.WHITE : PREMIUM_DANGER;
+                border = hover ? PREMIUM_DANGER : PREMIUM_BORDER;
+            } else {
+                bg = pressed ? new Color(0xE8, 0xEC, 0xF4) : hover ? PREMIUM_ACCENT_BG : PREMIUM_SURFACE;
+                fg = hover ? PREMIUM_ACCENT : PREMIUM_TEXT;
+                border = hover ? new Color(0xC0, 0xCB, 0xF7) : PREMIUM_BORDER;
+            }
+
+            g2.setColor(bg);
+            g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
+            g2.setColor(border);
+            g2.drawRoundRect(0, 0, w - 1, h - 1, arc, arc);
+
+            g2.setColor(fg);
+            g2.setFont(getFont());
+            java.awt.FontMetrics fm = g2.getFontMetrics();
+            String text = getText();
+            int tw = fm.stringWidth(text);
+            int tx = (w - tw) / 2;
+            int ty = (h - fm.getHeight()) / 2 + fm.getAscent();
+            g2.drawString(text, tx, ty);
+            g2.dispose();
+        }
+
+        @Override public java.awt.Dimension getPreferredSize() {
+            java.awt.FontMetrics fm = getFontMetrics(getFont());
+            int tw = fm.stringWidth(getText());
+            int pad = type.equals("primary") ? 32 : type.equals("nav") ? 20 : 28;
+            int h = type.equals("primary") ? 34 : type.equals("nav") ? 30 : 32;
+            return new java.awt.Dimension(tw + pad, h);
+        }
+    }
+
+    private void installFilterAutocomplete() {
+        filterField.addKeyListener(new KeyAdapter() {
+            @Override public void keyPressed(KeyEvent e) {
+                if (filterPopup == null || !filterPopup.isVisible()) {
+                    if (e.getKeyCode() == KeyEvent.VK_DOWN && filterField.isFocusOwner()) {
+                        showFilterPalette();
+                    }
+                    return;
+                }
+                int[] cur = new int[]{selectedCat, selectedItem};
+                switch (e.getKeyCode()) {
+                    case KeyEvent.VK_DOWN:
+                        advanceSelection(1); e.consume(); break;
+                    case KeyEvent.VK_UP:
+                        advanceSelection(-1); e.consume(); break;
+                    case KeyEvent.VK_ENTER:
+                        if (cur[0] >= 0 && cur[1] >= 0) applyPaletteSelection(cur[0], cur[1]);
+                        e.consume(); break;
+                    case KeyEvent.VK_ESCAPE:
+                        hideFilterPopup(); e.consume(); break;
+                }
+            }
+        });
+        filterField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override public void focusLost(java.awt.event.FocusEvent e) {
+                SwingUtilities.invokeLater(() -> {
+                    if (filterPopup == null || filterPopup.getMousePosition() == null && !filterField.isFocusOwner())
+                        hideFilterPopup();
+                });
+            }
+        });
+        filterField.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mouseClicked(java.awt.event.MouseEvent e) { showFilterPalette(); }
+        });
+    }
+
+    private void advanceSelection(int delta) {
+        if (paletteItems.isEmpty()) return;
+        int ci = selectedCat, ii = selectedItem + delta;
+        if (ci < 0) { ci = 0; ii = 0; }
+        while (true) {
+            if (ci < 0) ci = paletteItems.size() - 1;
+            if (ci >= paletteItems.size()) ci = 0;
+            java.util.List<PaletteItem> group = paletteItems.get(ci).items();
+            if (group.isEmpty()) { ci += delta > 0 ? 1 : -1; ii = 0; continue; }
+            if (ii < 0) { ci--; ii = Integer.MAX_VALUE; continue; }
+            if (ii >= group.size()) { ci++; ii = 0; continue; }
+            selectedCat = ci;
+            selectedItem = ii;
+            rebuildPalettePanel();
+            return;
+        }
+    }
+
+    private void applyPaletteSelection(int ci, int ii) {
+        if (ci < 0 || ci >= paletteItems.size()) return;
+        PaletteItem item = paletteItems.get(ci).items().get(ii);
+        if (item.prefix() != null) {
+            String cur = filterField.getText();
+            int lastSpace = cur.lastIndexOf(' ');
+            if (lastSpace >= 0) cur = cur.substring(lastSpace + 1);
+            filterField.setText((lastSpace >= 0 ? filterField.getText().substring(0, lastSpace + 1) : "") + item.prefix());
+            if (item.prefix().endsWith(":") && !item.placeholder().isEmpty()) {
+                hideFilterPopup();
+                resizePopupForInline(item.prefix() + item.placeholder());
+            } else {
+                hideFilterPopup();
+                applyFilter();
+            }
+        }
+        filterField.requestFocus();
+    }
+
+    private void showFilterPalette() { buildPaletteItems(null); showPopupPanel(); }
+    private void rebuildPalettePanel() { fillPalettePanelContent(); }
+
+    private int selectedCat = -1, selectedItem = -1;
+    private java.util.List<PaletteGroup> paletteItems = new ArrayList<>();
+    private JPanel palettePanel;
+
+    private record PaletteGroup(String label, java.util.List<PaletteItem> items) {}
+    private record PaletteItem(String prefix, String label, String desc, String placeholder) {}
+
+    private java.util.List<PaletteGroup> buildItems() {
+        var items = new ArrayList<PaletteGroup>();
+        items.add(new PaletteGroup("HTTP", java.util.List.of(
+            new PaletteItem("m:", "Method", "Match HTTP method", "GET"),
+            new PaletteItem("s:", "Status", "Match response status code", "200"),
+            new PaletteItem("h:", "Host", "Match host substring", "api.example"),
+            new PaletteItem("url:", "URL path", "Match URL path substring", "/api/v1/"),
+            new PaletteItem("body:", "Response body", "Search response body content", "token")
+        )));
+        items.add(new PaletteGroup("Request", java.util.List.of(
+            new PaletteItem("req:", "Request body", "Search request body content", "user_id"),
+            new PaletteItem("hdr:", "Request header", "Match header value", "Authorization"),
+            new PaletteItem("mime:", "MIME type", "Match response MIME type", "JSON"),
+            new PaletteItem("len:", "Content length", "Match response body length", "1024")
+        )));
+        items.add(new PaletteGroup("Yentra", java.util.List.of(
+            new PaletteItem("notes:", "Notes", "Search Notes column", "UNIQUE"),
+            new PaletteItem("u:", "Unique only", "Show only [YENTRA] UNIQUE", "UNIQUE"),
+            new PaletteItem("d:", "Duplicates", "Show only [YENTRA] DUPE", "DUPE"),
+            new PaletteItem("skip:", "Skipped", "Show only [YENTRA] SKIP", "SKIP")
+        )));
+        items.add(new PaletteGroup("Advanced", java.util.List.of(
+            new PaletteItem("r:", "Regex", "Regex across all columns + body", "\\d{3}"),
+            new PaletteItem(null, "Status > code", "Status greater than", ">399"),
+            new PaletteItem(null, "Status >= code", "Status greater or equal", ">=400"),
+            new PaletteItem(null, "Status < code", "Status less than", "<300"),
+            new PaletteItem(null, "Plain text", "Substring across everything", "search")
+        )));
+        return items;
+    }
+
+    private void buildPaletteItems(String filter) {
+        paletteItems = buildItems();
+        selectedCat = 0; selectedItem = 0;
+        if (paletteItems.get(0).items().isEmpty()) advanceSelection(1);
+    }
+
+    private void showPopupPanel() {
+        if (filterPopup == null) {
+            filterPopup = new JWindow(SwingUtilities.getWindowAncestor(filterField));
+            filterPopup.setFocusableWindowState(false);
+        }
+        palettePanel = new JPanel();
+        palettePanel.setLayout(new BoxLayout(palettePanel, BoxLayout.Y_AXIS));
+        palettePanel.setBackground(PREMIUM_SURFACE);
+        palettePanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(PREMIUM_BORDER, 1, true),
+                BorderFactory.createEmptyBorder(8, 0, 4, 0)));
+        fillPalettePanelContent();
+        filterPopup.getContentPane().removeAll();
+        JScrollPane scroll = new JScrollPane(palettePanel);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        scroll.getVerticalScrollBar().setPreferredSize(new java.awt.Dimension(6, 0));
+        filterPopup.add(scroll);
+        filterPopup.pack();
+        int w = Math.max(filterField.getWidth() + 4, 440);
+        int h = Math.min(palettePanel.getPreferredSize().height + 8, 420);
+        filterPopup.setSize(w, h);
+        java.awt.Point p = filterField.getLocationOnScreen();
+        filterPopup.setLocation(p.x, p.y + filterField.getHeight() + 4);
+        filterPopup.setVisible(true);
+    }
+
+    private void resizePopupForInline(String hint) {
+        palettePanel.removeAll();
+        JPanel row = paletteRow(null, hint, null, false);
+        palettePanel.add(row);
+        palettePanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(PREMIUM_BORDER, 1, true),
+                BorderFactory.createEmptyBorder(8, 16, 8, 16)));
+        filterPopup.pack();
+        java.awt.Point p = filterField.getLocationOnScreen();
+        filterPopup.setLocation(p.x, p.y + filterField.getHeight() + 4);
+        filterPopup.setSize(Math.max(filterField.getWidth() + 4, 220), palettePanel.getPreferredSize().height);
+    }
+
+    private void fillPalettePanelContent() {
+        palettePanel.removeAll();
+        for (int gi = 0; gi < paletteItems.size(); gi++) {
+            PaletteGroup group = paletteItems.get(gi);
+            JPanel headerRow = new JPanel(new BorderLayout());
+            headerRow.setBackground(PREMIUM_SURFACE);
+            headerRow.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 24));
+            JLabel header = new JLabel("  " + group.label().toUpperCase());
+            header.setFont(header.getFont().deriveFont(Font.BOLD, 10f));
+            header.setForeground(PREMIUM_MUTED);
+            header.setBorder(BorderFactory.createEmptyBorder(gi > 0 ? 10 : 2, 16, 4, 0));
+            headerRow.add(header, BorderLayout.WEST);
+            palettePanel.add(headerRow);
+            for (int ii = 0; ii < group.items().size(); ii++) {
+                PaletteItem item = group.items().get(ii);
+                boolean sel = gi == selectedCat && ii == selectedItem;
+                JPanel row = paletteRow(item.prefix(), item.label(), item.desc(), sel);
+                final int g = gi, i = ii;
+                row.addMouseListener(new java.awt.event.MouseAdapter() {
+                    @Override public void mouseClicked(java.awt.event.MouseEvent e) { applyPaletteSelection(g, i); }
+                    @Override public void mouseEntered(java.awt.event.MouseEvent e) {
+                        selectedCat = g; selectedItem = i;
+                        SwingUtilities.invokeLater(() -> fillPalettePanelContent());
+                    }
+                });
+                palettePanel.add(row);
+            }
+        }
+        palettePanel.revalidate();
+        palettePanel.repaint();
+    }
+
+    private JPanel paletteRow(String left, String center, String desc, boolean selected) {
+        JPanel row = new JPanel(new BorderLayout(10, 0));
+        row.setBackground(selected ? PREMIUM_ACCENT_BG : PREMIUM_SURFACE);
+        row.setBorder(BorderFactory.createEmptyBorder(6, 16, 6, 16));
+        row.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 34));
+
+        JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        leftPanel.setOpaque(false);
+
+        if (left != null) {
+            JLabel badge = new JLabel(left);
+            badge.setFont(new Font(Font.MONOSPACED, Font.BOLD, 12));
+            badge.setForeground(selected ? PREMIUM_ACCENT : new Color(0x6B, 0x7A, 0xF0));
+            badge.setBackground(selected ? PREMIUM_ACCENT_BG : new Color(0xF0, 0xF3, 0xFE));
+            badge.setOpaque(true);
+            badge.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(selected ? PREMIUM_ACCENT : new Color(0xD8, 0xDF, 0xFE), 1, true),
+                    BorderFactory.createEmptyBorder(1, 6, 1, 6)));
+            leftPanel.add(badge);
+        }
+
+        JLabel c = new JLabel(center);
+        c.setFont(c.getFont().deriveFont(Font.PLAIN, 13f));
+        c.setForeground(selected ? PREMIUM_ACCENT : PREMIUM_TEXT);
+        leftPanel.add(c);
+        row.add(leftPanel, BorderLayout.WEST);
+
+        if (desc != null) {
+            JLabel r = new JLabel(desc);
+            r.setFont(r.getFont().deriveFont(Font.PLAIN, 11f));
+            r.setForeground(PREMIUM_MUTED);
+            row.add(r, BorderLayout.EAST);
+        }
+        return row;
+    }
+
+    private void hideFilterPopup() {
+        if (filterPopup != null) { filterPopup.setVisible(false); }
+        selectedCat = -1; selectedItem = -1;
+    }
+
+    /**
+     * Bambda-style filter: parses prefix tokens from the search text, plus
+     * chip toggles for scope/shared/regex. Supported prefixes:
+     * <pre>
+     *   m:GET  method:POST   — HTTP method
+     *   s:200  status:404    — response status code
+     *   h:api  host:example  — host substring
+     *   url:path             — URL path substring
+     *   body:token           — response body substring
+     *   notes:unique         — Notes column substring
+     *   r:pat   regex:pat    — regex match across search blob
+     *   &gt;399 &gt;=400          — status code range
+     * </pre>
+     * Tokens are case-insensitive. Unprefixed text becomes substring search
+     * across the full search blob (all columns + request + response body).
+     */
+    private void applyFilter() {
+        List<RowFilter<Object, Object>> filters = new ArrayList<>();
+
+        if (sharedChip.isSelected()) {
+            filters.add(sharedRowFilter());
+        }
+        if (scopeChip.isSelected()) {
             filters.add(scopeRowFilter());
         }
 
         String text = filterField.getText();
         if (text != null && !text.isEmpty()) {
-            if (regexBox.isSelected()) {
-                try {
-                    Pattern p = Pattern.compile(text, Pattern.CASE_INSENSITIVE);
-                    filters.add(searchRowFilter(blob -> p.matcher(blob).find()));
-                } catch (PatternSyntaxException ex) {
-                    status.setText("Invalid regex: " + ex.getMessage());
-                    return;
+            String lower = text.toLowerCase(Locale.ROOT);
+            boolean regex = regexChip.isSelected();
+
+            java.util.regex.Matcher tm = TOKEN_PATTERN.matcher(text);
+            int lastEnd = 0;
+            while (tm.find()) {
+                if (tm.start() > lastEnd) {
+                    addSubstringFilter(filters, text.substring(lastEnd, tm.start()), regex);
                 }
-            } else {
-                String needle = text.toLowerCase(Locale.ROOT);
-                filters.add(searchRowFilter(blob -> blob.contains(needle)));
+                String prefix = tm.group(1).toLowerCase(Locale.ROOT);
+                String value = tm.group(2);
+                addTokenFilter(filters, prefix, value, regex);
+                lastEnd = tm.end();
+            }
+            if (lastEnd < text.length()) {
+                addSubstringFilter(filters, text.substring(lastEnd), regex);
+            } else if (lastEnd == 0) {
+                addSubstringFilter(filters, text, regex);
             }
         }
 
@@ -446,6 +943,185 @@ public final class UniqueRequestsViewer {
                 : filters.size() == 1 ? filters.get(0)
                 : RowFilter.andFilter(filters));
         updateCount();
+    }
+
+    private static final java.util.regex.Pattern TOKEN_PATTERN =
+            java.util.regex.Pattern.compile("(\\w+):\\s*([^\\s]+(?:\\s+[^\\s:]+(?=\\s+\\w+:|$))*)");
+
+    private void addTokenFilter(List<RowFilter<Object, Object>> filters, String prefix, String value, boolean regex) {
+        String v = value.toLowerCase(Locale.ROOT);
+        switch (prefix) {
+            case "m": case "method":
+                filters.add(colFilter(2, v, regex)); break;
+            case "s": case "status":
+                filters.add(colFilter(4, v, regex)); break;
+            case "h": case "host":
+                filters.add(colFilter(1, v, regex)); break;
+            case "url": case "path":
+                filters.add(colFilter(3, v, regex)); break;
+            case "body":
+                filters.add(bodyRowFilter(v, regex)); break;
+            case "req":
+                filters.add(reqBodyRowFilter(v, regex)); break;
+            case "hdr":
+                filters.add(headerRowFilter(v, regex)); break;
+            case "mime":
+                filters.add(colFilter(6, v, regex)); break;
+            case "len":
+                filters.add(lengthRowFilter(v, regex)); break;
+            case "notes":
+                filters.add(colFilter(7, v, regex)); break;
+            case "u":
+                filters.add(colFilter(7, "unique", false)); break;
+            case "d":
+                filters.add(colFilter(7, "dupe", false)); break;
+            case "skip":
+                filters.add(colFilter(7, "skip", false)); break;
+            case "r": case "regex":
+                try {
+                    Pattern p = Pattern.compile(value, Pattern.CASE_INSENSITIVE);
+                    filters.add(searchRowFilter(blob -> p.matcher(blob).find()));
+                } catch (PatternSyntaxException ex) {
+                    status.setText("Invalid regex: " + ex.getMessage());
+                }
+                break;
+            default:
+                addSubstringFilter(filters, prefix + ":" + value, regex);
+        }
+    }
+
+    private RowFilter<Object, Object> reqBodyRowFilter(String needle, boolean regex) {
+        return new RowFilter<>() {
+            @Override public boolean include(Entry<?, ?> entry) {
+                Object id = entry.getIdentifier();
+                if (!(id instanceof Integer)) return true;
+                Row row = model.rowAt((Integer) id);
+                if (row == null || row.rr == null || row.rr.request() == null) return false;
+                try {
+                    String body = row.rr.request().bodyToString();
+                    if (body == null) return false;
+                    String lower = body.toLowerCase(Locale.ROOT);
+                    return regex ? lower.matches("(?i).*" + needle + ".*") : lower.contains(needle);
+                } catch (RuntimeException e) { return false; }
+            }
+        };
+    }
+
+    private RowFilter<Object, Object> headerRowFilter(String needle, boolean regex) {
+        return new RowFilter<>() {
+            @Override public boolean include(Entry<?, ?> entry) {
+                Object id = entry.getIdentifier();
+                if (!(id instanceof Integer)) return true;
+                Row row = model.rowAt((Integer) id);
+                if (row == null || row.rr == null || row.rr.request() == null) return false;
+                try {
+                    for (HttpHeader h : row.rr.request().headers()) {
+                        String hv = (h.name() + ": " + h.value()).toLowerCase(Locale.ROOT);
+                        if (regex ? hv.matches("(?i).*" + needle + ".*") : hv.contains(needle)) return true;
+                    }
+                } catch (RuntimeException e) { return false; }
+                return false;
+            }
+        };
+    }
+
+    private RowFilter<Object, Object> lengthRowFilter(String needle, boolean regex) {
+        return new RowFilter<>() {
+            @Override public boolean include(Entry<?, ?> entry) {
+                Object id = entry.getIdentifier();
+                if (!(id instanceof Integer)) return true;
+                Row row = model.rowAt((Integer) id);
+                if (row == null || row.cells[5] == null || row.cells[5].isEmpty()) return false;
+                return regex ? row.cells[5].toLowerCase(Locale.ROOT).contains(needle)
+                             : row.cells[5].contains(needle);
+            }
+        };
+    }
+
+    private void addSubstringFilter(List<RowFilter<Object, Object>> filters, String text, boolean regex) {
+        String trimmed = text.trim();
+        if (trimmed.isEmpty()) return;
+
+        java.util.regex.Matcher cm = STATUS_COMPARE.matcher(trimmed);
+        if (cm.matches()) {
+            String op = cm.group(1);
+            try {
+                int threshold = Integer.parseInt(cm.group(2));
+                filters.add(statusCompareFilter(op, threshold));
+                return;
+            } catch (NumberFormatException ignored) {}
+        }
+
+        if (regex) {
+            try {
+                Pattern p = Pattern.compile(trimmed, Pattern.CASE_INSENSITIVE);
+                filters.add(searchRowFilter(blob -> p.matcher(blob).find()));
+            } catch (PatternSyntaxException ex) {
+                status.setText("Invalid regex: " + ex.getMessage());
+            }
+        } else {
+            String needle = trimmed.toLowerCase(Locale.ROOT);
+            filters.add(searchRowFilter(blob -> blob.contains(needle)));
+        }
+    }
+
+    private static final java.util.regex.Pattern STATUS_COMPARE =
+            java.util.regex.Pattern.compile("([><]=?)\\s*(\\d{3})");
+
+    private RowFilter<Object, Object> colFilter(int col, String needle, boolean regex) {
+        return new RowFilter<>() {
+            @Override public boolean include(Entry<?, ?> entry) {
+                Object id = entry.getIdentifier();
+                if (!(id instanceof Integer)) return true;
+                Row row = model.rowAt((Integer) id);
+                if (row == null || row.cells[col] == null) return false;
+                String val = row.cells[col].toLowerCase(Locale.ROOT);
+                return regex ? val.matches("(?i).*" + needle + ".*") : val.contains(needle);
+            }
+        };
+    }
+
+    private RowFilter<Object, Object> bodyRowFilter(String needle, boolean regex) {
+        return new RowFilter<>() {
+            @Override public boolean include(Entry<?, ?> entry) {
+                Object id = entry.getIdentifier();
+                if (!(id instanceof Integer)) return true;
+                Row row = model.rowAt((Integer) id);
+                if (row == null || row.rr == null || !row.rr.hasResponse()) return false;
+                try {
+                    String body = row.rr.response().bodyToString();
+                    if (body == null) return false;
+                    String lower = body.toLowerCase(Locale.ROOT);
+                    String n = needle.toLowerCase(Locale.ROOT);
+                    return regex ? lower.matches("(?i).*" + n + ".*") : lower.contains(n);
+                } catch (RuntimeException e) {
+                    return false;
+                }
+            }
+        };
+    }
+
+    private RowFilter<Object, Object> statusCompareFilter(String op, int threshold) {
+        return new RowFilter<>() {
+            @Override public boolean include(Entry<?, ?> entry) {
+                Object id = entry.getIdentifier();
+                if (!(id instanceof Integer)) return true;
+                Row row = model.rowAt((Integer) id);
+                if (row == null || row.cells[4] == null || row.cells[4].isEmpty()) return false;
+                try {
+                    int status = Integer.parseInt(row.cells[4]);
+                    return switch (op) {
+                        case ">" -> status > threshold;
+                        case ">=" -> status >= threshold;
+                        case "<" -> status < threshold;
+                        case "<=" -> status <= threshold;
+                        default -> false;
+                    };
+                } catch (NumberFormatException e) {
+                    return false;
+                }
+            }
+        };
     }
 
     /**
@@ -502,7 +1178,10 @@ public final class UniqueRequestsViewer {
     }
 
     private void updateCount() {
-        status.setText("Showing " + table.getRowCount() + " of " + model.getRowCount() + " request(s).");
+        int total = model.getRowCount();
+        int shown = table.getRowCount();
+        resultCounter.setText(shown == total ? total + " results" : shown + " / " + total);
+        status.setText("Showing " + shown + " of " + total + " request(s).");
     }
 
     /**
@@ -547,7 +1226,7 @@ public final class UniqueRequestsViewer {
     /** Routes an event line to Burp's extension output (the in-window live log was removed). */
     void log(String line) {
         try {
-            api.logging().logToOutput("[burp-dedupe] " + line);
+            api.logging().logToOutput("[yentra] " + line);
         } catch (RuntimeException ignored) {
             // API gone (extension unloaded) — drop the line rather than crash the worker
         }
@@ -555,7 +1234,7 @@ public final class UniqueRequestsViewer {
 
     /**
      * Empties the table. In live mode {@code seenIds} is kept, so cleared rows don't reappear on the
-     * next poll — only genuinely new {@code [DEDUPE] UNIQUE} entries arrive.
+     * next poll — only genuinely new {@code [YENTRA] UNIQUE} entries arrive.
      */
     private void clearView() {
         int n = model.getRowCount();
@@ -565,13 +1244,13 @@ public final class UniqueRequestsViewer {
         scheduleLiveExport();
     }
 
-    // ── Live feed: auto-collect HTTP-history rows marked [DEDUPE] UNIQUE ──────
+    // ── Live feed: auto-collect HTTP-history rows marked [YENTRA] UNIQUE ──────
 
     /**
      * Opens a <b>live</b> window that automatically collects every Proxy HTTP-history entry the
-     * extension has marked <code>[DEDUPE] UNIQUE</code> in its Notes — and only those. It polls the
+     * extension has marked <code>[YENTRA] UNIQUE</code> in its Notes — and only those. It polls the
      * history (~1s) so new uniques appear on their own as you browse; the duplicates Burp already
-     * folded away (<code>[DEDUPE] DUPE …</code>) never show, and uniques already in history are
+     * folded away (<code>[YENTRA] DUPE …</code>) never show, and uniques already in history are
      * collected the moment you open it. Closing the window stops the polling.
      *
      * <p>This re-reads the verdict the proxy handler already wrote — it does <em>not</em> recompute
@@ -587,7 +1266,7 @@ public final class UniqueRequestsViewer {
     /**
      * Builds the same live unique history as {@link #openLive}, but as an embeddable panel (no pop-up)
      * for registration as a Burp suite tab — get it via {@link #component()}. Polls Proxy history for
-     * {@code [DEDUPE] UNIQUE} rows for the life of the extension. Must be called on the Swing EDT.
+     * {@code [YENTRA] UNIQUE} rows for the life of the extension. Must be called on the Swing EDT.
      */
     static UniqueRequestsViewer embedLive(MontoyaApi api, UniqueFeed feed) {
         UniqueRequestsViewer viewer = new UniqueRequestsViewer(api, new ArrayList<>(), "Live unique history", false);
@@ -600,8 +1279,8 @@ public final class UniqueRequestsViewer {
     }
 
     /**
-     * Push path: a freshly-classified UNIQUE arrives directly from {@link DedupeProxyHandler} (on the
-     * proxy thread, off the EDT). Dedupes by request identity, parses the row off the EDT, then
+     * Push path: a freshly-classified UNIQUE arrives directly from {@link YentraProxyHandler} (on the
+     * proxy thread, off the EDT). Dedups by request identity, parses the row off the EDT, then
      * appends on the EDT. Never throws back into the proxy hot path.
      *
      * <p>{@code seenIds} is populated only <em>after</em> the row is successfully parsed and queued
@@ -637,7 +1316,7 @@ public final class UniqueRequestsViewer {
                 }
             }
         } catch (RuntimeException e) {
-            safeLogError("[burp-dedupe] live push add failed: " + e);
+            safeLogError("[yentra] live push add failed: " + e);
             // Row.of or invokeLater failed — undo the liveKey claim so the poll path can retry.
             // seenIds was not yet added (it comes after Row.of), so the poll will re-examine.
             if (claimedKey != null) {
@@ -735,7 +1414,7 @@ public final class UniqueRequestsViewer {
     }
 
     /**
-     * Appends any Proxy-history entry whose Notes start with {@code [DEDUPE] UNIQUE} that we haven't
+     * Appends any Proxy-history entry whose Notes start with {@code [YENTRA] UNIQUE} that we haven't
      * already collected. <b>Incremental:</b> ids already collected ({@code seenIds}) or already examined
      * and rejected ({@code examinedNonUnique}) are skipped with a cheap set lookup, so a steady tick only
      * does real work for genuinely new entries. Every {@link #FULL_RESCAN_TICKS} ticks the reject set is
@@ -779,7 +1458,7 @@ public final class UniqueRequestsViewer {
                         }
                         if (!"UNIQUE".equals(cat)) {
                             // Only cache a verdict we actually recognise as non-unique (DUPE/SKIP/OVRF).
-                            // "NONE" (no [DEDUPE] note) and "OTHER" (non-dedupe note, e.g. a role-port
+                            // "NONE" (no [YENTRA] note) and "OTHER" (non-yentra note, e.g. a role-port
                             // tag before the response handler stamped it) might not have been classified
                             // yet — don't cache them, so the next poll re-examines until a real verdict
                             // lands. This prevents genuinely UNIQUE requests from being hidden for up to
@@ -801,7 +1480,7 @@ public final class UniqueRequestsViewer {
                         // One malformed entry must never abort the whole scan — which would otherwise be
                         // caught below as a poll "failure" and, after a few ticks, self-stop the feed.
                         examinedNonUnique.add(id);
-                        safeLogError("[burp-dedupe] live scan skipped entry " + id + ": " + perEntry);
+                        safeLogError("[yentra] live scan skipped entry " + id + ": " + perEntry);
                     }
                 }
                 if (!batch.isEmpty()) {
@@ -821,14 +1500,14 @@ public final class UniqueRequestsViewer {
                         if (batch.size() <= 12) {
                             for (Row r : batch) log("UNIQUE  " + safeReqLine(r.rr.request()));
                         } else {
-                            log("Added " + batch.size() + " [DEDUPE] UNIQUE from history.");
+                            log("Added " + batch.size() + " [YENTRA] UNIQUE from history.");
                         }
                     });
                 }
                 if (fullPass) {
                     // Verdict census of the entries examined this pass. The live feed collects only
-                    // [DEDUPE] UNIQUE rows, so when it stays empty the reason is almost always visible
-                    // here: 0 UNIQUE because in-scope-only marked everything SKIP, no [DEDUPE] note at
+                    // [YENTRA] UNIQUE rows, so when it stays empty the reason is almost always visible
+                    // here: 0 UNIQUE because in-scope-only marked everything SKIP, no [YENTRA] note at
                     // all (stamping off / a duplicate extension overwrote it), or empty history.
                     final int histSize = history.size();
                     final int cU = nUnique, cD = nDupe, cS = nSkip, cO = nOvrf, cX = nOther, cN = nNoNote;
@@ -846,7 +1525,7 @@ public final class UniqueRequestsViewer {
             } finally {
                 polling.set(false);
             }
-        }, "burp-dedupe-live-poll");
+        }, "yentra-live-poll");
         t.setDaemon(true);
         t.start();
     }
@@ -860,7 +1539,7 @@ public final class UniqueRequestsViewer {
      */
     private void handleLivePollFailure(RuntimeException ex) {
         int fails = ++liveFailures;
-        safeLogError("[burp-dedupe] live history poll failed (" + fails + "/" + MAX_LIVE_FAILURES + "): " + ex);
+        safeLogError("[yentra] live history poll failed (" + fails + "/" + MAX_LIVE_FAILURES + "): " + ex);
         if (fails >= MAX_LIVE_FAILURES) {
             SwingUtilities.invokeLater(() -> {
                 if (liveTimer != null) liveTimer.stop();
@@ -881,7 +1560,7 @@ public final class UniqueRequestsViewer {
 
     /**
      * Categorises a history row's Notes by our verdict: {@code "UNIQUE"}, {@code "DUPE"}, {@code "SKIP"}
-     * or {@code "OVRF"}; {@code "OTHER"} for a non-dedupe note, {@code "NONE"} for no note at all. Only
+     * or {@code "OVRF"}; {@code "OTHER"} for a non-yentra note, {@code "NONE"} for no note at all. Only
      * {@code "UNIQUE"} rows are collected by the live feed — the rest feed the diagnostic census in
      * {@link #pollHistory}.
      */
@@ -890,8 +1569,8 @@ public final class UniqueRequestsViewer {
             if (a == null || !a.hasNotes()) return "NONE";
             String notes = a.notes();
             if (notes == null || notes.isEmpty()) return "NONE";
-            if (!notes.startsWith(DedupeProxyHandler.NOTE_PREFIX)) return "OTHER";
-            String rest = notes.substring(DedupeProxyHandler.NOTE_PREFIX.length()).trim();
+            if (!notes.startsWith(YentraProxyHandler.NOTE_PREFIX)) return "OTHER";
+            String rest = notes.substring(YentraProxyHandler.NOTE_PREFIX.length()).trim();
             if (rest.startsWith("UNIQUE")) return "UNIQUE";
             if (rest.startsWith("DUPE"))   return "DUPE";
             if (rest.startsWith("SKIP"))   return "SKIP";
@@ -914,19 +1593,19 @@ public final class UniqueRequestsViewer {
         if (unique > 0) {
             return "Live: found " + unique + " UNIQUE — collecting…"; // transient; next tick fills the table
         }
-        int dedupeNotes = dupe + skip + ovrf;
-        if (dedupeNotes == 0) {
-            return "Live: " + histSize + " rows but none carry a [DEDUPE] verdict — enable "
-                    + "\"Stamp Notes column with verdict\" in the Dedupe tab (or another extension is "
+        int yentraNotes = dupe + skip + ovrf;
+        if (yentraNotes == 0) {
+            return "Live: " + histSize + " rows but none carry a [YENTRA] verdict — enable "
+                    + "\"Stamp Notes column with verdict\" in the Yentra tab (or another extension is "
                     + "overwriting the Notes).";
         }
         if (skip > 0 && dupe == 0 && ovrf == 0) {
-            return "Live: 0 UNIQUE — all " + skip + " classified rows are [DEDUPE] SKIP. Turn off "
-                    + "\"In-scope only\" in the Dedupe tab (or set a matching Target scope), then Apply.";
+            return "Live: 0 UNIQUE — all " + skip + " classified rows are [YENTRA] SKIP. Turn off "
+                    + "\"In-scope only\" in the Yentra tab (or set a matching Target scope), then Apply.";
         }
         return "Live: 0 UNIQUE of " + histSize + " rows (DUPE=" + dupe + " SKIP=" + skip
                 + (ovrf > 0 ? " OVRF=" + ovrf : "") + "). If you expected uniques, check for a duplicate "
-                + "Dedupe extension overwriting verdicts, then click \"Stamp existing history\".";
+                + "Yentra extension overwriting verdicts, then click \"Stamp existing history\".";
     }
 
     private void showRow(int modelRow) {
@@ -934,6 +1613,7 @@ public final class UniqueRequestsViewer {
         if (row == null || row.rr == null) return;
         HttpRequestResponse rr = row.rr;
         requestEditor.setRequest(rr.request());
+        this.originalRequest = rr.request();
         boolean hasResp = rr.hasResponse() && rr.response() != null;
         HttpResponse resp = hasResp ? rr.response() : null;
         responseEditor.setResponse(resp != null ? resp : HttpResponse.httpResponse());
@@ -943,15 +1623,22 @@ public final class UniqueRequestsViewer {
     private void showResponseInfo(HttpResponse resp, long elapsedMs) {
         if (resp == null) {
             responseInfo.setText(" ");
+            responseInfo.setForeground(PREMIUM_MUTED);
             return;
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("HTTP ").append(resp.statusCode());
+        int code = resp.statusCode();
+        sb.append("HTTP ").append(code);
         String reason = resp.reasonPhrase();
         if (reason != null && !reason.isEmpty()) sb.append(" ").append(reason);
         sb.append("  |  ").append(formatBytes(resp.body().length()));
         if (elapsedMs >= 0) sb.append("  |  ").append(elapsedMs).append(" ms");
         responseInfo.setText(sb.toString());
+        if (code >= 200 && code < 300) responseInfo.setForeground(PREMIUM_OK);
+        else if (code >= 300 && code < 400) responseInfo.setForeground(PREMIUM_ACCENT);
+        else if (code >= 400 && code < 500) responseInfo.setForeground(PREMIUM_WARN);
+        else if (code >= 500) responseInfo.setForeground(PREMIUM_DANGER);
+        else responseInfo.setForeground(PREMIUM_TEXT);
     }
 
     private static String formatBytes(int b) {
@@ -974,10 +1661,17 @@ public final class UniqueRequestsViewer {
     private void updateHistoryButtons() {
         btnBack.setEnabled(historyPos > 0);
         btnForward.setEnabled(historyPos < repeaterHistory.size() - 1);
+        btnBack.repaint();
+        btnForward.repaint();
     }
 
-    private void cancelRequest() {
-        status.setText(" ");
+    private void resetRequest() {
+        if (originalRequest != null) {
+            requestEditor.setRequest(originalRequest);
+            status.setText("Request reset to original.");
+        } else {
+            status.setText("No original request to reset to — select a row first.");
+        }
     }
 
     private void sendEditedRequest() {
@@ -1013,9 +1707,9 @@ public final class UniqueRequestsViewer {
                     responseInfo.setText("Send failed");
                     status.setText("Send failed: " + ex.getMessage());
                 });
-                api.logging().logToError("[burp-dedupe] inline repeater send failed: " + ex);
+                api.logging().logToError("[yentra] inline repeater send failed: " + ex);
             }
-        }, "burp-dedupe-repeater-send");
+        }, "yentra-repeater-send");
         t.setDaemon(true);
         t.start();
     }
@@ -1128,7 +1822,7 @@ public final class UniqueRequestsViewer {
             status.setText("Sent " + sent + " request(s) to Repeater.");
             log("Sent " + sent + " request(s) to Repeater.");
         } catch (RuntimeException ex) {
-            api.logging().logToError("[burp-dedupe] send-to-Repeater failed: " + ex);
+            api.logging().logToError("[yentra] send-to-Repeater failed: " + ex);
             status.setText("Sent " + sent + " then failed: " + ex.getMessage());
             log("Send to Repeater failed after " + sent + ": " + ex.getMessage());
         }
@@ -1160,7 +1854,7 @@ public final class UniqueRequestsViewer {
                 handler.accept(rr, caption);
                 status.setText("Shared: " + caption);
             } else {
-                status.setText("No Live Share — open the Dedupe Share tab first.");
+                status.setText("No Live Share — open the Yentra Share tab first.");
             }
         });
         popup.add(shareItem);
@@ -1185,7 +1879,7 @@ public final class UniqueRequestsViewer {
         java.util.LinkedHashSet<String> urls = new java.util.LinkedHashSet<>();
         for (HttpRequestResponse rr : sel) {
             if (rr == null || rr.request() == null) continue;
-            String scopeUrl = DedupeContextMenu.scopeUrlFor(rr.request(), hostOnly);
+            String scopeUrl = YentraContextMenu.scopeUrlFor(rr.request(), hostOnly);
             if (scopeUrl != null) urls.add(scopeUrl);
         }
         if (urls.isEmpty()) return;
@@ -1194,7 +1888,7 @@ public final class UniqueRequestsViewer {
         int answer = JOptionPane.showConfirmDialog(table,
                 "Exclude the following " + label + " from Target scope?\n\n"
                         + String.join("\n", urls),
-                "Dedupe — Remove from scope", JOptionPane.OK_CANCEL_OPTION,
+                "Yentra — Remove from scope", JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.WARNING_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return;
 
@@ -1204,11 +1898,11 @@ public final class UniqueRequestsViewer {
                 api.scope().excludeFromScope(url);
                 done++;
             } catch (RuntimeException ex) {
-                api.logging().logToError("[burp-dedupe] scope exclude failed for " + url + ": " + ex);
+                api.logging().logToError("[yentra] scope exclude failed for " + url + ": " + ex);
             }
         }
         status.setText("Excluded " + done + " " + label + " from scope.");
-        api.logging().logToOutput("[burp-dedupe] excluded " + done + " " + label + " from scope.");
+        api.logging().logToOutput("[yentra] excluded " + done + " " + label + " from scope.");
     }
 
     /** Saves all selected requests (and their responses) into one .http file the user chooses. */
@@ -1237,14 +1931,14 @@ public final class UniqueRequestsViewer {
         File target = chooser.getSelectedFile();
         try {
             Files.writeString(target.toPath(),
-                    "# burp-dedupe — " + sel.size() + " saved request(s) for AI"
+                    "# yentra — " + sel.size() + " saved request(s) for AI"
                             + (bodyOnly ? " (responses: body only, pretty JSON)" : "") + "\n" + AI_PROTOCOL + "\n"
                             + buildHttpDump(sel, bodyOnly), StandardCharsets.UTF_8);
             status.setText("Saved " + sel.size() + " request(s) to " + target.getAbsolutePath());
-            api.logging().logToOutput("[burp-dedupe] saved " + sel.size() + " request(s) to " + target.getAbsolutePath());
+            api.logging().logToOutput("[yentra] saved " + sel.size() + " request(s) to " + target.getAbsolutePath());
             log("Saved " + sel.size() + " request(s) to " + target.getName());
         } catch (IOException ex) {
-            api.logging().logToError("[burp-dedupe] save requests failed: " + ex);
+            api.logging().logToError("[yentra] save requests failed: " + ex);
             status.setText("Save failed: " + ex.getMessage());
             log("Save failed: " + ex.getMessage());
         }
@@ -1252,10 +1946,10 @@ public final class UniqueRequestsViewer {
 
     // ── Magic Cookie: reissue the selection with a swapped-in auth set ────────
 
-    private static final String PREF_MAGIC_COOKIE = "burp-dedupe.magic-cookie.headers";
+    private static final String PREF_MAGIC_COOKIE = "yentra.magic-cookie.headers";
 
     /** Remembers the Save-for-AI "body only, pretty JSON" checkbox across saves/restarts. */
-    private static final String PREF_SAVE_PRETTY_BODY = "burp-dedupe.save.pretty-body-only";
+    private static final String PREF_SAVE_PRETTY_BODY = "yentra.save.pretty-body-only";
 
     /** Shown until an auth set is saved. Parses to zero headers (every line is a comment). */
     private static final String DEFAULT_MAGIC_HINT =
@@ -1371,7 +2065,7 @@ public final class UniqueRequestsViewer {
                     }
                 } catch (RuntimeException ex) {
                     results.log("ERROR  " + safeReqLine(req) + " — " + ex.getMessage());
-                    api.logging().logToError("[burp-dedupe] " + resultTitle + " send failed: " + ex);
+                    api.logging().logToError("[yentra] " + resultTitle + " send failed: " + ex);
                     failed++;
                 }
                 final int s = sent, f = failed, sk = skipped;
@@ -1385,10 +2079,10 @@ public final class UniqueRequestsViewer {
             SwingUtilities.invokeLater(() -> {
                 status.setText(resultTitle + ": sent " + s + (sk > 0 ? ", " + sk + " skipped" : "")
                         + (f > 0 ? ", " + f + " failed" : "") + ".");
-                api.logging().logToOutput("[burp-dedupe] " + resultTitle + " — sent " + s
+                api.logging().logToOutput("[yentra] " + resultTitle + " — sent " + s
                         + " skipped " + sk + " failed " + f);
             });
-        }, "burp-dedupe-reissue");
+        }, "yentra-reissue");
         t.setDaemon(true);
         t.start();
     }
@@ -1445,11 +2139,11 @@ public final class UniqueRequestsViewer {
 
     // ── Match & Replace (IDOR/BOLA): swap an id/token in path/body, then reissue ──
 
-    private static final String PREF_MR_MATCH   = "burp-dedupe.match-replace.match";
-    private static final String PREF_MR_REPLACE = "burp-dedupe.match-replace.replace";
-    private static final String PREF_MR_PATH    = "burp-dedupe.match-replace.path";
-    private static final String PREF_MR_BODY    = "burp-dedupe.match-replace.body";
-    private static final String PREF_MR_REGEX   = "burp-dedupe.match-replace.regex";
+    private static final String PREF_MR_MATCH   = "yentra.match-replace.match";
+    private static final String PREF_MR_REPLACE = "yentra.match-replace.replace";
+    private static final String PREF_MR_PATH    = "yentra.match-replace.path";
+    private static final String PREF_MR_BODY    = "yentra.match-replace.body";
+    private static final String PREF_MR_REGEX   = "yentra.match-replace.regex";
 
     /**
      * Opens the Match &amp; Replace editor for the current selection — built for IDOR/BOLA: enter the
@@ -1681,7 +2375,7 @@ public final class UniqueRequestsViewer {
     private static String whyUnique(String notes) {
         String low = notes == null ? "" : notes.toLowerCase(Locale.ROOT);
         if (low.contains("unique")) {
-            return "[DEDUPE] UNIQUE — first request with this signature (method + host + path + sorted "
+            return "[YENTRA] UNIQUE — first request with this signature (method + host + path + sorted "
                     + "param names + status, per the active preset); its duplicates were folded out.";
         }
         if (low.contains("dupe")) {
@@ -1770,7 +2464,7 @@ public final class UniqueRequestsViewer {
         return "'" + s.replace("'", "'\\''") + "'";
     }
 
-    // ── Live export: mirror the current selection to ~/.burp-dedupe/<project>/selection.http ──
+    // ── Live export: mirror the current selection to ~/.yentra/<project>/selection.http ──
 
     /** (Re)schedules a debounced export so rapid selection changes coalesce into a single write. */
     private void scheduleLiveExport() {
@@ -1798,18 +2492,18 @@ public final class UniqueRequestsViewer {
                 synchronized (EXPORT_LOCK) {
                     Files.createDirectories(dir);
                     writeExport(dir.resolve("live-unique.http"),
-                            "# burp-dedupe live export — project: " + project + " — " + ts + " — "
+                            "# yentra live export — project: " + project + " — " + ts + " — "
                                     + all.size() + " unique request(s)\n" + AI_PROTOCOL + "\n", all, "no requests yet");
                     writeExport(dir.resolve("selection.http"),
-                            "# burp-dedupe selection — project: " + project + " — " + ts + " — "
+                            "# yentra selection — project: " + project + " — " + ts + " — "
                                     + sel.size() + " request(s)\n" + AI_PROTOCOL + "\n", sel, "nothing selected");
                 }
                 SwingUtilities.invokeLater(() -> status.setText(
                         "Live-exported " + all.size() + " unique / " + sel.size() + " selected to " + dir));
             } catch (IOException | RuntimeException ex) {
-                api.logging().logToError("[burp-dedupe] live export failed: " + ex);
+                api.logging().logToError("[yentra] live export failed: " + ex);
             }
-        }, "burp-dedupe-live-export");
+        }, "yentra-live-export");
         t.setDaemon(true);
         t.start();
     }
@@ -1820,9 +2514,9 @@ public final class UniqueRequestsViewer {
         Files.writeString(file, content, StandardCharsets.UTF_8);
     }
 
-    /** {@code ~/.burp-dedupe/<sanitized-project-name>/} — holds live-unique.http and selection.http. */
+    /** {@code ~/.yentra/<sanitized-project-name>/} — holds live-unique.http and selection.http. */
     private Path exportDir() {
-        return Path.of(System.getProperty("user.home", "."), ".burp-dedupe", exportProjectName());
+        return Path.of(System.getProperty("user.home", "."), ".yentra", exportProjectName());
     }
 
     /** The current Burp project name, sanitised for use as a folder (fallback {@code "default"}). */
@@ -1908,7 +2602,7 @@ public final class UniqueRequestsViewer {
         };
     }
 
-    /** Shared requests (received via Live Share) get this highlight colour in the Dedupe Live table. */
+    /** Shared requests (received via Live Share) get this highlight colour in the Yentra Live table. */
     private static final HighlightColor SHARED_COLOR = HighlightColor.MAGENTA;
 
     /**

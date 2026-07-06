@@ -28,10 +28,10 @@ tasks.withType<JavaCompile> {
 }
 
 tasks.jar {
-    archiveBaseName.set("burp-dedupe")
+    archiveBaseName.set("yentra")
     manifest {
         attributes(
-            "Implementation-Title" to "Burp Dedupe",
+            "Implementation-Title" to "Yentra",
             "Implementation-Version" to project.version
         )
     }

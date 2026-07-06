@@ -1,4 +1,4 @@
-package burpdedupe.liveshare;
+package yentra.liveshare;
 
 import java.io.*;
 import java.net.*;
@@ -37,7 +37,7 @@ public class UpnpPortMapper {
                     + "<NewInternalPort>" + port + "</NewInternalPort>"
                     + "<NewInternalClient>" + localIp + "</NewInternalClient>"
                     + "<NewEnabled>1</NewEnabled>"
-                    + "<NewPortMappingDescription>burp-dedupe</NewPortMappingDescription>"
+                    + "<NewPortMappingDescription>yentra</NewPortMappingDescription>"
                     + "<NewLeaseDuration>0</NewLeaseDuration>"
                     + "</u:AddPortMapping>"
             );
