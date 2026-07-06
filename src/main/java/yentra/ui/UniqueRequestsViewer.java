@@ -2543,37 +2543,37 @@ public final class UniqueRequestsViewer {
         }
 
         Object json = null;
+        List<KeyValue> formPairs = null;
         String stripped = body.strip();
-        boolean looksLikeData = stripped.startsWith("{") || stripped.startsWith("[")
-                || stripped.contains(":");
+        boolean isJson = stripped.startsWith("{") || stripped.startsWith("[") || stripped.contains(":");
+        boolean isForm = stripped.contains("=") && stripped.contains("&");
 
-        if (looksLikeData) {
+        if (isJson) {
             try {
                 json = parseJson(stripped);
             } catch (RuntimeException e) {
-                try {
-                    json = parseJson(sanitizeJson(stripped));
-                } catch (RuntimeException e2) {
-                    json = extractJsonSegment(stripped);
-                }
+                try { json = parseJson(sanitizeJson(stripped)); }
+                catch (RuntimeException e2) { json = extractJsonSegment(stripped); }
             }
-            if (json == null) {
-                api.logging().logToOutput("[yentra] JSON parse failed, converting method-only");
-            }
+        } else if (isForm) {
+            formPairs = flattenForm(stripped);
         }
 
         HttpRequest out = req;
         if ("GET".equalsIgnoreCase(targetMethod)) {
+            String qs = null;
             if (json != null) {
-                List<KeyValue> flat = flattenJson(json);
-                String qs = toQueryString(flat);
+                qs = toQueryString(flattenJson(json));
+            } else if (formPairs != null) {
+                qs = toQueryString(formPairs);
+            }
+            if (qs != null && !qs.isEmpty()) {
                 String path = out.path();
                 int qi = path.indexOf('?');
                 String base = qi >= 0 ? path.substring(0, qi) : path;
-                out = out.withPath(base + (qs.isEmpty() ? "" : "?" + qs));
+                out = out.withPath(base + "?" + qs);
             }
-            out = out.withMethod("GET");
-            out = out.withBody("");
+            out = out.withMethod("GET").withBody("");
             if (out.hasHeader("Content-Type")) out = out.withRemovedHeader("Content-Type");
             if (out.hasHeader("Content-Length")) out = out.withRemovedHeader("Content-Length");
         } else {
