@@ -129,7 +129,7 @@ The main configuration panel — `"Yentra"` suite tab.
 
 **Signature fields:** Method · Scheme · Host · Port · Path · Normalize numeric/UUID/hex path segments · Query param names · Query param values · Body param names · Body param values · Response status code · Response Content-Type
 
-**Filters:** In-scope only · Skip static assets (`.css`, `.js`, `.png`, `.gif`, `.svg`, `.woff`, `.ttf`, `.eot`, `.otf`, `.ico`, `.webp`, `.map`, `.mp4`, `.mp3`) · Include custom headers (comma-separated)
+**Filters:** In-scope only · Skip static assets (`.png`, `.svg`, `.jpg`, `.gif`, `.webp`, `.css`, `.scss`, `.js`, `.mjs`, `.woff`, `.ttf`, `.eot`, `.otf`, `.ico`, `.mp3`, `.mp4`, `.wav`, `.avi`, `.mov`, `.m3u8`) · Include custom headers (comma-separated)
 
 ### Presets
 

@@ -58,8 +58,10 @@ public final class YentraEngine {
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
     private static final Pattern HEX_SEGMENT = Pattern.compile("^[0-9a-fA-F]{16,}$");
     private static final String[] STATIC_SUFFIXES = {
-            ".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
-            ".woff", ".woff2", ".ttf", ".eot", ".otf", ".map", ".mp4", ".mp3"
+            ".png", ".svg", ".jpg", ".jpeg", ".gif", ".webp", ".ico",
+            ".css", ".scss", ".js", ".mjs", ".map",
+            ".woff", ".woff2", ".ttf", ".eot", ".otf",
+            ".mp3", ".mp4", ".wav", ".avi", ".mov", ".m3u8"
     };
     /** Per-identity request headers dropped before a cross-identity signature (attacker/victim share a count). */
     private static final String[] IDENTITY_HEADERS = {"Cookie", "Authorization"};

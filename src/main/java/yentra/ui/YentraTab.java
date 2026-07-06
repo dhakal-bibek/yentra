@@ -47,7 +47,7 @@ public final class YentraTab {
     private final JCheckBox cbStatus = new JCheckBox("Response status code");
     private final JCheckBox cbCType = new JCheckBox("Response Content-Type");
     private final JCheckBox cbScope = new JCheckBox("In-scope only");
-    private final JCheckBox cbStatic = new JCheckBox("Skip static assets (.css/.js/images/fonts)");
+    private final JCheckBox cbStatic = new JCheckBox("Skip static assets (images, fonts, media, css/js)");
     private final JTextField tfHeaders = new JTextField();
     private final JSpinner spCap = new JSpinner(new SpinnerNumberModel(200_000, 1_000, 5_000_000, 10_000));
 
