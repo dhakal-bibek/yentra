@@ -429,6 +429,10 @@ public final class UniqueRequestsViewer {
                 item.addActionListener(ev -> convertRequestTo(m));
                 methodMenu.add(item);
             }
+            methodMenu.addSeparator();
+            JMenuItem allItem = new JMenuItem("All (GET+POST+PUT+PATCH+DELETE)");
+            allItem.addActionListener(ev -> convertRequestToAll());
+            methodMenu.add(allItem);
             methodMenu.show(convertBtn, 0, convertBtn.getHeight());
         });
 
@@ -2319,7 +2323,7 @@ public final class UniqueRequestsViewer {
         for (HttpRequestResponse rr : sel) {
             if (rr == null || rr.request() == null) { failed++; continue; }
             try {
-                HttpRequest converted2 = convert(rr.request(), targetMethod);
+                HttpRequest converted2 = convertMethod(rr.request(), targetMethod);
                 if (converted2 != null) {
                     results.add(HttpRequestResponse.httpRequestResponse(converted2, HttpResponse.httpResponse()));
                     converted++;
@@ -2342,7 +2346,33 @@ public final class UniqueRequestsViewer {
         SwingUtilities.invokeLater(() -> new UniqueRequestsViewer(api, results, title));
     }
 
-private HttpRequest convert(HttpRequest req, String targetMethod) {
+    private void convertRequestToAll() {
+        List<HttpRequestResponse> sel = selectedRows();
+        if (sel.isEmpty()) { status.setText("Select a request first."); return; }
+        List<HttpRequestResponse> results = new ArrayList<>();
+        String[] methods = {"GET", "POST", "PUT", "PATCH", "DELETE"};
+        for (HttpRequestResponse rr : sel) {
+            if (rr == null || rr.request() == null) continue;
+            for (String m : methods) {
+                try {
+                    HttpRequest out = convertMethod(rr.request(), m);
+                    if (out != null) {
+                        results.add(HttpRequestResponse.httpRequestResponse(out, HttpResponse.httpResponse()));
+                    }
+                } catch (RuntimeException ex) {
+                    api.logging().logToError("[yentra] convert-to-all failed for " + m + ": " + ex);
+                }
+            }
+        }
+        if (results.isEmpty()) {
+            status.setText("No requests could be converted.");
+            return;
+        }
+        status.setText("Converted " + sel.size() + " request(s) × 5 methods = " + results.size() + " results.");
+        SwingUtilities.invokeLater(() -> new UniqueRequestsViewer(api, results, "All methods"));
+    }
+
+private HttpRequest convertMethod(HttpRequest req, String targetMethod) {
         String currentMethod = safe(() -> req.method().toUpperCase());
         if (currentMethod.equalsIgnoreCase(targetMethod)) return req;
 
