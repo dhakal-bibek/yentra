@@ -212,13 +212,10 @@ public final class UniqueRequestsViewer {
         editors.setResizeWeight(0.5);
 
         // Inline repeater: edit the request (left), Send, see the response (right) — no pop-up.
-        JButton sendEdited = new JButton("Send ▶  (" + (IS_MAC ? "Cmd+Enter" : "Ctrl+Space") + ")");
+        JButton sendEdited = new JButton("Send ▶  (Ctrl+Space)");
         sendEdited.setToolTipText("<html>Send the request as edited on the left; the response shows on the right.<br>"
-                + (IS_MAC
-                    ? "<b>Cmd+Enter</b> (same as Burp Repeater on macOS).<br>"
-                       + "Ctrl+Space works only if you disable input-source switching<br>"
-                       + "in System Settings → Keyboard → Keyboard Shortcuts → Input Sources."
-                    : "<b>Ctrl+Space</b> (same as Burp Repeater). Also: <b>Ctrl+Enter</b>.")
+                + "<b>Ctrl+Space</b> (same as Burp Repeater). Also: <b>Ctrl+Enter</b>."
+                + (IS_MAC ? "<br>On macOS, if Ctrl+Space doesn't work, use <b>Cmd+Enter</b> instead." : "")
                 + "</html>");
         sendEdited.addActionListener(e -> sendEditedRequest());
         JPanel sendBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
@@ -930,13 +927,10 @@ public final class UniqueRequestsViewer {
     }
 
     /**
-     * Binds <b>Send</b> to platform-appropriate shortcuts:
-     * <ul>
-     *   <li><b>macOS</b> — Cmd+Enter (primary, same as Burp Repeater).
-     *       Ctrl+Space is also tried via AWTEventListener but may be consumed by the OS
-     *       for input-source switching.</li>
-     *   <li><b>Windows/Linux</b> — Ctrl+Space (primary, same as Burp Repeater). Ctrl+Enter as fallback.</li>
-     * </ul>
+     * Binds <b>Send</b> to Ctrl+Space (and Cmd+Enter on macOS as fallback).
+     * Uses {@code EventQueue.push()} to intercept key events at the lowest level
+     * in Java's AWT pipeline — before KeyboardFocusManager, before InputMethod,
+     * before any component sees the event.
      */
     private void installSendKeys(JComponent c) {
         c.getActionMap().put("dedupe-send", new AbstractAction() {
@@ -945,23 +939,31 @@ public final class UniqueRequestsViewer {
             }
         });
         InputMap im = c.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
-
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
         if (IS_MAC) {
-            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()), "dedupe-send");
-            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
-            Toolkit.getDefaultToolkit().addAWTEventListener(e -> {
-                if (e.getID() != KeyEvent.KEY_PRESSED) return;
-                KeyEvent ke = (KeyEvent) e;
-                if (ke.getKeyCode() != KeyEvent.VK_SPACE) return;
-                if ((ke.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) == 0) return;
-                if (!root.isShowing()) return;
-                ke.consume();
-                SwingUtilities.invokeLater(this::sendEditedRequest);
-            }, AWTEvent.KEY_EVENT_MASK);
-        } else {
-            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
-            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
+            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER,
+                    Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()), "dedupe-send");
         }
+
+        java.awt.EventQueue queue = Toolkit.getDefaultToolkit().getSystemEventQueue();
+        queue.push(new java.awt.EventQueue() {
+            @Override
+            protected void dispatchEvent(AWTEvent event) {
+                if (event instanceof KeyEvent) {
+                    KeyEvent ke = (KeyEvent) event;
+                    if (ke.getID() == KeyEvent.KEY_PRESSED
+                            && ke.getKeyCode() == KeyEvent.VK_SPACE
+                            && (ke.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) != 0
+                            && root.isShowing()) {
+                        ke.consume();
+                        sendEditedRequest();
+                        return;
+                    }
+                }
+                super.dispatchEvent(event);
+            }
+        });
     }
 
     private static void disableInputMethods(Component c) {
