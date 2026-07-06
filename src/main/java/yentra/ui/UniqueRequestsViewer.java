@@ -436,6 +436,21 @@ public final class UniqueRequestsViewer {
             methodMenu.show(convertBtn, 0, convertBtn.getHeight());
         });
 
+        JButton respToReqBtn = new PremiumButton("Response to Request", "default");
+        respToReqBtn.setToolTipText("<html>Take the JSON response body and generate a new request from it.<br>"
+                + "Reuses the original request's path, host, cookies, and auth headers.<br>"
+                + "GET → response JSON flattened to query params.<br>"
+                + "POST/PUT/PATCH/DELETE → response JSON as request body.</html>");
+        respToReqBtn.addActionListener(e -> {
+            JPopupMenu methodMenu = new JPopupMenu();
+            for (String m : new String[]{"GET", "POST", "PUT", "PATCH", "DELETE"}) {
+                JMenuItem item = new JMenuItem(m);
+                item.addActionListener(ev -> responseToRequest(m));
+                methodMenu.add(item);
+            }
+            methodMenu.show(respToReqBtn, 0, respToReqBtn.getHeight());
+        });
+
         JButton clear = new PremiumButton("Clear", "danger");
         clear.setToolTipText("Empty this window — clears the collected rows. "
                 + "(In the live window, new [YENTRA] UNIQUE requests keep arriving after.)");
@@ -516,6 +531,7 @@ public final class UniqueRequestsViewer {
         bar.add(magic);
         bar.add(matchReplace);
         bar.add(convertBtn);
+        bar.add(respToReqBtn);
         bar.add(clear);
         bar.add(cbLiveExport);
         bar.add(Box.createHorizontalStrut(10));
@@ -2378,7 +2394,102 @@ public final class UniqueRequestsViewer {
         t.start();
     }
 
-private HttpRequest convertMethod(HttpRequest req, String targetMethod) {
+    private void responseToRequest(String targetMethod) {
+        List<HttpRequestResponse> sel = selectedRows();
+        if (sel.isEmpty()) { status.setText("Select a request with a JSON response first."); return; }
+        List<HttpRequest> generated = new ArrayList<>();
+        for (HttpRequestResponse rr : sel) {
+            if (rr == null || rr.request() == null || !rr.hasResponse() || rr.response() == null) continue;
+            String respBody = "";
+            try { respBody = rr.response().bodyToString(); } catch (RuntimeException e) { /* no body */ }
+            if (respBody == null || respBody.strip().isEmpty()) continue;
+
+            String stripped = respBody.strip();
+            if (!stripped.startsWith("{") && !stripped.startsWith("[")) continue;
+
+            Object json;
+            try {
+                json = parseJson(stripped);
+            } catch (RuntimeException e) {
+                try { json = parseJson(sanitizeJson(stripped)); }
+                catch (RuntimeException e2) { continue; }
+            }
+
+            HttpRequest base = rr.request();
+            HttpRequest out;
+            if ("GET".equalsIgnoreCase(targetMethod)) {
+                List<KeyValue> flat = flattenJson(json);
+                String qs = toQueryString(flat);
+                String path = base.path();
+                int qi = path.indexOf('?');
+                out = base.withPath((qi >= 0 ? path.substring(0, qi) : path) + (qs.isEmpty() ? "" : "?" + qs))
+                    .withMethod("GET")
+                    .withBody("");
+                if (out.hasHeader("Content-Type")) out = out.withRemovedHeader("Content-Type");
+                if (out.hasHeader("Content-Length")) out = out.withRemovedHeader("Content-Length");
+            } else {
+                String pretty = prettyPrintJson(stripped);
+                out = base.withMethod(targetMethod.toUpperCase())
+                    .withBody(pretty);
+                if (out.hasHeader("Content-Type")) out = out.withUpdatedHeader("Content-Type", "application/json");
+                else out = out.withAddedHeader("Content-Type", "application/json");
+            }
+            generated.add(out);
+        }
+        if (generated.isEmpty()) {
+            status.setText("No requests with valid JSON responses selected.");
+            return;
+        }
+        streamConversions(generated, "Response → " + targetMethod + "  (" + generated.size() + " req)");
+    }
+
+    private static String prettyPrintJson(String raw) {
+        Object parsed = parseJson(raw.strip());
+        return formatJsonValue(parsed, 0);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String formatJsonValue(Object obj, int indent) {
+        String pad = "  ".repeat(indent);
+        String padInner = "  ".repeat(indent + 1);
+        if (obj == null) return "null";
+        if (obj instanceof Boolean) return obj.toString();
+        if (obj instanceof Number) {
+            double d = ((Number) obj).doubleValue();
+            return d == Math.floor(d) && !Double.isInfinite(d) ? Long.toString((long) d) : obj.toString();
+        }
+        if (obj instanceof String) {
+            return "\"" + ((String) obj).replace("\\", "\\\\").replace("\"", "\\\"")
+                    .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\"";
+        }
+        if (obj instanceof java.util.List) {
+            var list = (java.util.List<?>) obj;
+            if (list.isEmpty()) return "[]";
+            StringBuilder sb = new StringBuilder("[\n");
+            for (int i = 0; i < list.size(); i++) {
+                sb.append(padInner).append(formatJsonValue(list.get(i), indent + 1));
+                if (i < list.size() - 1) sb.append(",");
+                sb.append("\n");
+            }
+            return sb.append(pad).append("]").toString();
+        }
+        if (obj instanceof java.util.Map) {
+            var map = (java.util.Map<String, Object>) obj;
+            if (map.isEmpty()) return "{}";
+            StringBuilder sb = new StringBuilder("{\n");
+            int i = 0;
+            for (var e : map.entrySet()) {
+                sb.append(padInner).append("\"").append(e.getKey()).append("\": ")
+                  .append(formatJsonValue(e.getValue(), indent + 1));
+                if (++i < map.size()) sb.append(",");
+                sb.append("\n");
+            }
+            return sb.append(pad).append("}").toString();
+        }
+        return String.valueOf(obj);
+    }
+
+    private HttpRequest convertMethod(HttpRequest req, String targetMethod) {
         String currentMethod = safe(() -> req.method().toUpperCase());
         if (currentMethod.equalsIgnoreCase(targetMethod)) return req;
 
