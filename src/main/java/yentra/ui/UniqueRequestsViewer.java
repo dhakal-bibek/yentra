@@ -418,6 +418,20 @@ public final class UniqueRequestsViewer {
                 + "then reissue the selected request(s) — watch the live results for an unexpected 200.");
         matchReplace.addActionListener(e -> openMatchReplaceDialog());
 
+        JButton convertBtn = new PremiumButton("Convert Request To", "default");
+        convertBtn.setToolTipText("<html>Convert selected JSON-body request to another HTTP method.<br>"
+                + "POST/PUT/PATCH → change method only. GET → flatten JSON to query params.<br>"
+                + "DELETE → keep body or flatten to query params.</html>");
+        convertBtn.addActionListener(e -> {
+            JPopupMenu methodMenu = new JPopupMenu();
+            for (String m : new String[]{"GET", "POST", "PUT", "PATCH", "DELETE"}) {
+                JMenuItem item = new JMenuItem(m);
+                item.addActionListener(ev -> convertRequestTo(m));
+                methodMenu.add(item);
+            }
+            methodMenu.show(convertBtn, 0, convertBtn.getHeight());
+        });
+
         JButton clear = new PremiumButton("Clear", "danger");
         clear.setToolTipText("Empty this window — clears the collected rows. "
                 + "(In the live window, new [YENTRA] UNIQUE requests keep arriving after.)");
@@ -497,6 +511,7 @@ public final class UniqueRequestsViewer {
         bar.add(save);
         bar.add(magic);
         bar.add(matchReplace);
+        bar.add(convertBtn);
         bar.add(clear);
         bar.add(cbLiveExport);
         bar.add(Box.createHorizontalStrut(10));
@@ -2292,6 +2307,254 @@ public final class UniqueRequestsViewer {
 
     private static void warn(Component parent, String msg) {
         JOptionPane.showMessageDialog(parent, msg, "Match & Replace", JOptionPane.WARNING_MESSAGE);
+    }
+
+    // ── Convert Request To: JSON body → any HTTP method ──
+
+    private void convertRequestTo(String targetMethod) {
+        List<HttpRequestResponse> sel = selectedRows();
+        if (sel.isEmpty()) { status.setText("Select one or more requests first."); return; }
+        List<HttpRequestResponse> results = new ArrayList<>();
+        int converted = 0, failed = 0;
+        for (HttpRequestResponse rr : sel) {
+            if (rr == null || rr.request() == null) { failed++; continue; }
+            try {
+                HttpRequest converted2 = convert(rr.request(), targetMethod);
+                if (converted2 != null) {
+                    results.add(HttpRequestResponse.httpRequestResponse(converted2, HttpResponse.httpResponse()));
+                    converted++;
+                } else {
+                    failed++;
+                }
+            } catch (RuntimeException ex) {
+                api.logging().logToError("[yentra] convert-to-" + targetMethod + " failed: " + ex);
+                failed++;
+            }
+        }
+        String title = "Converted to " + targetMethod;
+        if (results.isEmpty()) {
+            status.setText("No requests could be converted to " + targetMethod + ". "
+                    + "Ensure selected requests have JSON or form-urlencoded bodies.");
+            return;
+        }
+        status.setText("Converted " + converted + " request(s) to " + targetMethod
+                + (failed > 0 ? ", " + failed + " failed" : "") + ".");
+        SwingUtilities.invokeLater(() -> new UniqueRequestsViewer(api, results, title));
+    }
+
+private HttpRequest convert(HttpRequest req, String targetMethod) {
+        String currentMethod = safe(() -> req.method().toUpperCase());
+        if (currentMethod.equalsIgnoreCase(targetMethod)) return req;
+
+        String body = safe(req::bodyToString);
+        if (body.isEmpty()) {
+            return swapMethod(req, targetMethod);
+        }
+
+        Object json = null;
+        String contentType = safe(() -> { try { return req.headerValue("Content-Type"); } catch (RuntimeException e) { return ""; } });
+        boolean isJson = contentType.toLowerCase().contains("json");
+
+        if (isJson) {
+            try {
+                String stripped = body.strip();
+                json = parseJson(stripped);
+            } catch (RuntimeException e) {
+                api.logging().logToError("[yentra] JSON parse failed: " + e.getMessage());
+                return null;
+            }
+        }
+
+        HttpRequest out = req;
+        if ("GET".equalsIgnoreCase(targetMethod) && json != null) {
+            List<KeyValue> flat = flattenJson(json);
+            String qs = toQueryString(flat);
+            String path = out.path();
+            int qi = path.indexOf('?');
+            String base = qi >= 0 ? path.substring(0, qi) : path;
+            out = out.withPath(base + (qs.isEmpty() ? "" : "?" + qs));
+            out = out.withMethod("GET");
+            out = out.withBody("");
+            if (out.hasHeader("Content-Type")) out = out.withRemovedHeader("Content-Type");
+        } else {
+            out = swapMethod(out, targetMethod);
+        }
+        return out;
+    }
+
+    private static HttpRequest swapMethod(HttpRequest req, String targetMethod) {
+        String m = targetMethod.toUpperCase();
+        if (!java.util.Set.of("GET", "POST", "PUT", "PATCH", "DELETE").contains(m)) return req;
+        return req.withMethod(m);
+    }
+
+    // ── JSON parser (recursive descent, zero dependencies) ──
+
+    private record KeyValue(String key, String value) {}
+
+    private static Object parseJson(String s) {
+        int[] i = new int[]{0};
+        return parseValue(skipWs(s, i), i);
+    }
+
+    private static Object parseValue(String s, int[] i) {
+        char c = s.charAt(i[0]);
+        return switch (c) {
+            case '{' -> parseObject(s, i);
+            case '[' -> parseArray(s, i);
+            case '"' -> parseString(s, i);
+            case 't', 'f' -> parseBool(s, i);
+            case 'n' -> parseNull(s, i);
+            default -> parseNumber(s, i);
+        };
+    }
+
+    private static java.util.Map<String, Object> parseObject(String s, int[] i) {
+        var map = new java.util.LinkedHashMap<String, Object>();
+        if (s.charAt(i[0]) != '{') throw new IllegalArgumentException("Expected {");
+        i[0]++; skipWs(s, i);
+        if (s.charAt(i[0]) == '}') { i[0]++; return map; }
+        while (true) {
+            skipWs(s, i);
+            String key = parseString(s, i);
+            skipWs(s, i);
+            if (s.charAt(i[0]) != ':') throw new IllegalArgumentException("Expected :");
+            i[0]++; skipWs(s, i);
+            Object val = parseValue(s, i);
+            map.put(key, val);
+            skipWs(s, i);
+            if (s.charAt(i[0]) == '}') { i[0]++; return map; }
+            if (s.charAt(i[0]) != ',') throw new IllegalArgumentException("Expected , or }");
+            i[0]++;
+        }
+    }
+
+    private static java.util.List<Object> parseArray(String s, int[] i) {
+        var list = new ArrayList<>();
+        if (s.charAt(i[0]) != '[') throw new IllegalArgumentException("Expected [");
+        i[0]++; skipWs(s, i);
+        if (s.charAt(i[0]) == ']') { i[0]++; return list; }
+        while (true) {
+            skipWs(s, i);
+            list.add(parseValue(s, i));
+            skipWs(s, i);
+            if (s.charAt(i[0]) == ']') { i[0]++; return list; }
+            if (s.charAt(i[0]) != ',') throw new IllegalArgumentException("Expected , or ]");
+            i[0]++;
+        }
+    }
+
+    private static String parseString(String s, int[] i) {
+        if (s.charAt(i[0]) != '"') throw new IllegalArgumentException("Expected \"");
+        StringBuilder sb = new StringBuilder();
+        i[0]++;
+        while (i[0] < s.length()) {
+            char c = s.charAt(i[0]);
+            if (c == '"') { i[0]++; return sb.toString(); }
+            if (c == '\\' && i[0] + 1 < s.length()) {
+                i[0]++;
+                char esc = s.charAt(i[0]);
+                sb.append(switch (esc) { case '"' -> '"'; case '\\' -> '\\'; case '/' -> '/';
+                    case 'b' -> '\b'; case 'f' -> '\f'; case 'n' -> '\n'; case 'r' -> '\r'; case 't' -> '\t';
+                    default -> esc; });
+            } else {
+                sb.append(c);
+            }
+            i[0]++;
+        }
+        throw new IllegalArgumentException("Unterminated string");
+    }
+
+    private static Boolean parseBool(String s, int[] i) {
+        if (s.startsWith("true", i[0])) { i[0] += 4; return true; }
+        if (s.startsWith("false", i[0])) { i[0] += 5; return false; }
+        throw new IllegalArgumentException("Expected true/false");
+    }
+
+    private static Object parseNull(String s, int[] i) {
+        if (s.startsWith("null", i[0])) { i[0] += 4; return null; }
+        throw new IllegalArgumentException("Expected null");
+    }
+
+    private static Number parseNumber(String s, int[] i) {
+        int start = i[0];
+        if (i[0] < s.length() && s.charAt(i[0]) == '-') i[0]++;
+        while (i[0] < s.length() && Character.isDigit(s.charAt(i[0]))) i[0]++;
+        boolean isDouble = false;
+        if (i[0] < s.length() && s.charAt(i[0]) == '.') { isDouble = true; i[0]++; }
+        while (i[0] < s.length() && Character.isDigit(s.charAt(i[0]))) i[0]++;
+        if (i[0] < s.length() && (s.charAt(i[0]) == 'e' || s.charAt(i[0]) == 'E')) {
+            isDouble = true; i[0]++;
+            if (i[0] < s.length() && (s.charAt(i[0]) == '+' || s.charAt(i[0]) == '-')) i[0]++;
+            while (i[0] < s.length() && Character.isDigit(s.charAt(i[0]))) i[0]++;
+        }
+        String num = s.substring(start, i[0]);
+        return isDouble ? Double.parseDouble(num) : Long.parseLong(num);
+    }
+
+    private static String skipWs(String s, int[] i) {
+        while (i[0] < s.length() && Character.isWhitespace(s.charAt(i[0]))) i[0]++;
+        return s;
+    }
+
+    // ── Flatten parsed JSON into key=value pairs ──
+
+    private static List<KeyValue> flattenJson(Object obj) {
+        List<KeyValue> out = new ArrayList<>();
+        flattenJson("", obj, out);
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void flattenJson(String prefix, Object obj, List<KeyValue> out) {
+        if (obj instanceof java.util.Map) {
+            for (var e : ((java.util.Map<String, Object>) obj).entrySet()) {
+                String key = prefix.isEmpty() ? e.getKey() : prefix + "." + e.getKey();
+                flattenJson(key, e.getValue(), out);
+            }
+        } else if (obj instanceof java.util.List) {
+            for (Object item : (java.util.List<?>) obj) {
+                if (item instanceof java.util.Map || item instanceof java.util.List) {
+                    flattenJson(prefix, item, out);
+                } else {
+                    out.add(new KeyValue(prefix + "[]", item == null ? "" : item.toString()));
+                }
+            }
+        } else {
+            out.add(new KeyValue(prefix, obj == null ? "" : obj.toString()));
+        }
+    }
+
+    private static List<KeyValue> flattenForm(String body) {
+        List<KeyValue> out = new ArrayList<>();
+        for (String pair : body.split("&")) {
+            int eq = pair.indexOf('=');
+            if (eq >= 0) {
+                out.add(new KeyValue(urlDecode(pair.substring(0, eq)), urlDecode(pair.substring(eq + 1))));
+            } else {
+                out.add(new KeyValue(urlDecode(pair), ""));
+            }
+        }
+        return out;
+    }
+
+    private static String urlDecode(String s) {
+        try { return java.net.URLDecoder.decode(s, StandardCharsets.UTF_8); }
+        catch (Exception e) { return s; }
+    }
+
+    private static String urlEncode(String s) {
+        try { return java.net.URLEncoder.encode(s, StandardCharsets.UTF_8); }
+        catch (Exception e) { return s; }
+    }
+
+    private static String toQueryString(List<KeyValue> pairs) {
+        StringBuilder sb = new StringBuilder();
+        for (KeyValue kv : pairs) {
+            if (sb.length() > 0) sb.append('&');
+            sb.append(urlEncode(kv.key())).append('=').append(urlEncode(kv.value()));
+        }
+        return sb.toString();
     }
 
     /** Builds the multi-request {@code .http} dump (each request + response in a ####-delimited section). */
