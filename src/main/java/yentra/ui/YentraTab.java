@@ -49,6 +49,7 @@ public final class YentraTab {
     private final JCheckBox cbScope = new JCheckBox("In-scope only");
     private final JCheckBox cbStatic = new JCheckBox("Skip static assets (images, fonts, media, css/js)");
     private final JTextField tfHeaders = new JTextField();
+    private final JTextField tfCustomStatic = new JTextField("");
     private final JSpinner spCap = new JSpinner(new SpinnerNumberModel(200_000, 1_000, 5_000_000, 10_000));
 
     private final JLabel lblTotal = new JLabel("0");
@@ -155,6 +156,11 @@ public final class YentraTab {
         fg.gridx = 0; fg.gridy = 0; fg.gridwidth = 2;
         filters.add(cbScope, fg);
         fg.gridy++; filters.add(cbStatic, fg);
+        fg.gridy++; fg.gridwidth = 1;
+        filters.add(new JLabel("Extra static extensions (comma-sep):"), fg);
+        fg.gridx = 1;
+        filters.add(tfCustomStatic, fg);
+        fg.gridx = 0;
         fg.gridy++; fg.gridwidth = 1;
         filters.add(new JLabel("Include headers (comma-sep, lowercase):"), fg);
         fg.gridx = 1;
@@ -424,6 +430,7 @@ public final class YentraTab {
         cbScope.setSelected(cfg.inScopeOnly);
         cbStatic.setSelected(cfg.skipStatic);
         tfHeaders.setText(String.join(", ", cfg.includeHeaders));
+        tfCustomStatic.setText(String.join(", ", cfg.customStaticSuffixes));
     }
 
     private void applyToEngine() {
@@ -451,6 +458,7 @@ public final class YentraTab {
                 .includeContentType(cbCType.isSelected())
                 .inScopeOnly(cbScope.isSelected())
                 .skipStatic(cbStatic.isSelected())
+                .customStaticSuffixes(parseStaticSuffixes(tfCustomStatic.getText()))
                 .includeHeaders(headers)
                 .build();
         engine.updateConfig(next);
@@ -631,5 +639,17 @@ public final class YentraTab {
     private boolean lastLoggedEnabled = false;
     private int lastLoggedCount = -1;
     /** True while we set controls programmatically (preset load / construction) — suppresses markCustom. */
+
+    private static Set<String> parseStaticSuffixes(String text) {
+        Set<String> set = new LinkedHashSet<>();
+        if (text == null || text.isBlank()) return set;
+        for (String part : text.split("[,; ]+")) {
+            String t = part.strip().toLowerCase();
+            if (t.isEmpty()) continue;
+            if (!t.startsWith(".")) t = "." + t;
+            set.add(t);
+        }
+        return set;
+    }
     private boolean loading = false;
 }

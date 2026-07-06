@@ -126,7 +126,7 @@ public final class UniqueRequestsViewer {
     private final JToggleButton regexChip = new PremiumChip(".* regex", new Color(0x7C, 0x5C, 0xF3));
     private final JToggleButton scopeChip = new PremiumChip("In-scope", new Color(0x12, 0xB7, 0x6A));
     private final JToggleButton sharedChip = new PremiumChip("Shared", new Color(0xF5, 0x9E, 0x0B));
-    private final JToggleButton hideOptionsChip = new PremiumChip("Hide OPTIONS", new Color(0x99, 0x66, 0xCC));
+    private final JToggleButton hideOptionsChip = new PremiumChip("Hide HEAD/OPTIONS", new Color(0x99, 0x66, 0xCC));
     private final JLabel status = new JLabel(" ");
     /** Live mode: proxy ids already collected, by either path (so neither push nor poll re-adds one). Concurrent: written from the proxy thread (push) and the poll thread. */
     private final Set<Integer> seenIds = ConcurrentHashMap.newKeySet();
@@ -460,7 +460,7 @@ public final class UniqueRequestsViewer {
         sharedChip.addItemListener(e -> applyFilter());
 
         hideOptionsChip.setSelected(true);
-        hideOptionsChip.setToolTipText("Hide CORS preflight OPTIONS requests from the feed.");
+        hideOptionsChip.setToolTipText("Hide HEAD and OPTIONS requests (CORS preflight + connectivity checks).");
         hideOptionsChip.addItemListener(e -> applyFilter());
 
         filterChips.add(regexChip);
@@ -1175,7 +1175,8 @@ public final class UniqueRequestsViewer {
                 Object id = entry.getIdentifier();
                 if (!(id instanceof Integer)) return true;
                 Row row = model.rowAt((Integer) id);
-                return row == null || row.cells[2] == null || !"OPTIONS".equalsIgnoreCase(row.cells[2]);
+                return row == null || row.cells[2] == null
+                    || (!"OPTIONS".equalsIgnoreCase(row.cells[2]) && !"HEAD".equalsIgnoreCase(row.cells[2]));
             }
         };
     }

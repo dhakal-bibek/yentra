@@ -46,6 +46,8 @@ public final class SignatureConfig {
     public final boolean inScopeOnly;
     /** Skip static-looking resources (css, js, images, fonts). */
     public final boolean skipStatic;
+    /** Custom additional static extensions to skip (lowercased, with dot). */
+    public final Set<String> customStaticSuffixes;
     /** Header names to include in signature (lowercased). */
     public final Set<String> includeHeaders;
 
@@ -65,6 +67,7 @@ public final class SignatureConfig {
         this.includeContentType = b.includeContentType;
         this.inScopeOnly = b.inScopeOnly;
         this.skipStatic = b.skipStatic;
+        this.customStaticSuffixes = Collections.unmodifiableSet(new LinkedHashSet<>(b.customStaticSuffixes));
         this.includeHeaders = Collections.unmodifiableSet(new LinkedHashSet<>(b.includeHeaders));
     }
 
@@ -126,6 +129,7 @@ public final class SignatureConfig {
                 .includeBodyParamNames(includeBodyParamNames).includeBodyParamValues(includeBodyParamValues)
                 .includeStatusCode(includeStatusCode).includeContentType(includeContentType)
                 .inScopeOnly(inScopeOnly).skipStatic(skipStatic)
+                .customStaticSuffixes(customStaticSuffixes)
                 .includeHeaders(includeHeaders);
     }
 
@@ -145,6 +149,7 @@ public final class SignatureConfig {
         private boolean includeContentType = false;
         private boolean inScopeOnly = false;
         private boolean skipStatic = true;
+        private Set<String> customStaticSuffixes = new LinkedHashSet<>();
         private Set<String> includeHeaders = new LinkedHashSet<>();
 
         public Builder preset(Preset v) { preset = v; return this; }
@@ -162,6 +167,7 @@ public final class SignatureConfig {
         public Builder includeContentType(boolean v) { includeContentType = v; return this; }
         public Builder inScopeOnly(boolean v) { inScopeOnly = v; return this; }
         public Builder skipStatic(boolean v) { skipStatic = v; return this; }
+        public Builder customStaticSuffixes(Set<String> v) { customStaticSuffixes = new LinkedHashSet<>(v); return this; }
         public Builder includeHeaders(Set<String> v) { includeHeaders = new LinkedHashSet<>(v); return this; }
 
         public SignatureConfig build() { return new SignatureConfig(this); }

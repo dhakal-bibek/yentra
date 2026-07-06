@@ -132,7 +132,7 @@ public final class YentraEngine {
             totalSkipped.incrementAndGet();
             return new Result(Verdict.SKIPPED, null, 0);
         }
-        if (cfg.skipStatic && isStaticAsset(request)) {
+        if (cfg.skipStatic && isStaticAsset(request, cfg)) {
             totalSkipped.incrementAndGet();
             return new Result(Verdict.SKIPPED, null, 0);
         }
@@ -173,11 +173,14 @@ public final class YentraEngine {
         return classify(req, null); // null response → status & Content-Type excluded from the signature
     }
 
-    private static boolean isStaticAsset(HttpRequest req) {
+    private static boolean isStaticAsset(HttpRequest req, SignatureConfig cfg) {
         String path = req.pathWithoutQuery();
         if (path == null) return false;
         String lower = path.toLowerCase();
         for (String suf : STATIC_SUFFIXES) {
+            if (lower.endsWith(suf)) return true;
+        }
+        for (String suf : cfg.customStaticSuffixes) {
             if (lower.endsWith(suf)) return true;
         }
         return false;
