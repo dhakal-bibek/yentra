@@ -70,7 +70,24 @@ Burp Suite extension + port-based highlighter: dedupes proxy history into a live
 
 ## Architecture Overview
 
-Yentra registers a `ProxyResponseHandler` that intercepts every response entering HTTP history. Each request/response pair is classified by computing a **128-bit SHA-256-derived signature** from configurable request parts (method, host, path, params, status, headers). Signatures are stored in a `ConcurrentHashMap<Signature, AtomicInteger>` — fast, thread-safe, and memory-light.
+Yentra is built around a request pipeline that flows from capture to distribution:
+
+```
+Proxy Traffic → YentraEngine → [YENTRA] Stamp → Yentra Live Feed → 🌐 Live Share → Peers
+                                         ↓                           ↓
+                                    HTTP History               AI Bridge (.http)
+```
+
+**Core components:**
+
+| Component | Role |
+|---|---|
+| **YentraEngine** | Thread-safe deduplication engine — computes 128-bit SHA-256 signatures from configurable request parts; `ConcurrentHashMap<Signature, AtomicInteger>` seen-set |
+| **YentraProxyHandler** | Intercepts every proxy response, classifies it (unique/dupe/skip/overflow), stamps Notes, highlights rows, pushes uniques to the live feed |
+| **Yentra Live Feed** | In-memory push feed — every `UNIQUE` is streamed directly to the **Yentra Live** tab without re-reading from history |
+| **🌐 Live Share** | Real-time peer-to-peer TCP/SSH/Relay server — auto-forwards `UNIQUE` requests to connected peers, re-issues received traffic through local proxy |
+| **AI Bridge** | Filesystem mirror to `~/.yentra/<project>/` — every unique exported as a `curl`-ready case file for Claude Code |
+| **PortHighlighter** | Injects `X-AI-Use: attacker|victim` by listener port and colors rows per-port, per-verdict |
 
 **Verdict system:**
 
