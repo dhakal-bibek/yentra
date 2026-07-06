@@ -2318,58 +2318,64 @@ public final class UniqueRequestsViewer {
     private void convertRequestTo(String targetMethod) {
         List<HttpRequestResponse> sel = selectedRows();
         if (sel.isEmpty()) { status.setText("Select one or more requests first."); return; }
-        List<HttpRequestResponse> results = new ArrayList<>();
-        int converted = 0, failed = 0;
+        List<HttpRequest> convertedList = new ArrayList<>();
         for (HttpRequestResponse rr : sel) {
-            if (rr == null || rr.request() == null) { failed++; continue; }
-            try {
-                HttpRequest converted2 = convertMethod(rr.request(), targetMethod);
-                if (converted2 != null) {
-                    results.add(HttpRequestResponse.httpRequestResponse(converted2, HttpResponse.httpResponse()));
-                    converted++;
-                } else {
-                    failed++;
-                }
-            } catch (RuntimeException ex) {
-                api.logging().logToError("[yentra] convert-to-" + targetMethod + " failed: " + ex);
-                failed++;
-            }
+            if (rr == null || rr.request() == null) continue;
+            HttpRequest out = convertMethod(rr.request(), targetMethod);
+            if (out != null) convertedList.add(out);
         }
-        String title = "Converted to " + targetMethod;
-        if (results.isEmpty()) {
-            status.setText("No requests could be converted to " + targetMethod + ". "
-                    + "Ensure selected requests have JSON or form-urlencoded bodies.");
+        if (convertedList.isEmpty()) {
+            status.setText("No requests could be converted to " + targetMethod + ".");
             return;
         }
-        status.setText("Converted " + converted + " request(s) to " + targetMethod
-                + (failed > 0 ? ", " + failed + " failed" : "") + ".");
-        SwingUtilities.invokeLater(() -> new UniqueRequestsViewer(api, results, title));
+        streamConversions(convertedList, "Converted → " + targetMethod + "  (" + convertedList.size() + " req)");
     }
 
     private void convertRequestToAll() {
         List<HttpRequestResponse> sel = selectedRows();
         if (sel.isEmpty()) { status.setText("Select a request first."); return; }
-        List<HttpRequestResponse> results = new ArrayList<>();
+        List<HttpRequest> convertedList = new ArrayList<>();
         String[] methods = {"GET", "POST", "PUT", "PATCH", "DELETE"};
         for (HttpRequestResponse rr : sel) {
             if (rr == null || rr.request() == null) continue;
             for (String m : methods) {
-                try {
-                    HttpRequest out = convertMethod(rr.request(), m);
-                    if (out != null) {
-                        results.add(HttpRequestResponse.httpRequestResponse(out, HttpResponse.httpResponse()));
-                    }
-                } catch (RuntimeException ex) {
-                    api.logging().logToError("[yentra] convert-to-all failed for " + m + ": " + ex);
-                }
+                HttpRequest out = convertMethod(rr.request(), m);
+                if (out != null) convertedList.add(out);
             }
         }
-        if (results.isEmpty()) {
+        if (convertedList.isEmpty()) {
             status.setText("No requests could be converted.");
             return;
         }
-        status.setText("Converted " + sel.size() + " request(s) × 5 methods = " + results.size() + " results.");
-        SwingUtilities.invokeLater(() -> new UniqueRequestsViewer(api, results, "All methods"));
+        streamConversions(convertedList, "Converted → All methods  (" + convertedList.size() + " req)");
+    }
+
+    private void streamConversions(List<HttpRequest> requests, String title) {
+        status.setText(title + ": sending " + requests.size() + " request(s)…");
+        UniqueRequestsViewer results = new UniqueRequestsViewer(api, new ArrayList<>(), title);
+        Thread t = new Thread(() -> {
+            int sent = 0, failed = 0;
+            for (HttpRequest req : requests) {
+                try {
+                    HttpRequestResponse out = api.http().sendRequest(req);
+                    results.log(logLine(req, out));
+                    SwingUtilities.invokeLater(() -> results.addResult(out));
+                    sent++;
+                } catch (RuntimeException ex) {
+                    results.log("ERROR  " + safeReqLine(req) + " — " + ex.getMessage());
+                    failed++;
+                }
+                final int s = sent, f = failed;
+                SwingUtilities.invokeLater(() -> status.setText(title + ": sent " + s
+                        + (f > 0 ? ", " + f + " failed" : "") + "…"));
+            }
+            final int s = sent, f = failed;
+            results.log("done — sent " + s + (f > 0 ? ", " + f + " failed" : ""));
+            SwingUtilities.invokeLater(() -> status.setText("Converted → " + title + ": " + s
+                    + " sent" + (f > 0 ? ", " + f + " failed" : "") + "."));
+        }, "yentra-convert-send");
+        t.setDaemon(true);
+        t.start();
     }
 
 private HttpRequest convertMethod(HttpRequest req, String targetMethod) {
