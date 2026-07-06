@@ -56,7 +56,7 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
-import java.awt.Toolkit;
+import java.awt.KeyboardFocusManager;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
@@ -206,12 +206,10 @@ public final class UniqueRequestsViewer {
         editors.setResizeWeight(0.5);
 
         // Inline repeater: edit the request (left), Send, see the response (right) — no pop-up.
-        JButton sendEdited = new JButton("Send ▶  (Ctrl+Space / Cmd+Enter)");
+        JButton sendEdited = new JButton("Send ▶  (Ctrl+Space)");
         sendEdited.setToolTipText("<html>Send the request as edited on the left; the response shows on the right.<br>"
-                + "Shortcuts: <b>Ctrl+Space</b>, <b>Ctrl+Enter</b>, or <b>Cmd+Enter</b>.<br>"
-                + "macOS may reserve Ctrl+Space for input-source switching — use <b>Cmd+Enter</b> there "
-                + "(or free Ctrl+Space in System Settings → Keyboard → Keyboard Shortcuts → Input Sources).<br>"
-                + "Uses Burp's HTTP client, so it lands in Logger, not Proxy history.</html>");
+                + "Shortcut: <b>Ctrl+Space</b> (same as Burp Repeater).<br>"
+                + "Also works: <b>Ctrl+Enter</b>.</html>");
         sendEdited.addActionListener(e -> sendEditedRequest());
         JPanel sendBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         sendBar.add(new JLabel("Repeater:"));
@@ -219,7 +217,7 @@ public final class UniqueRequestsViewer {
         JPanel editorPanel = new JPanel(new BorderLayout());
         editorPanel.add(sendBar, BorderLayout.NORTH);
         editorPanel.add(editors, BorderLayout.CENTER);
-        installSendKeys(editorPanel);          // Ctrl+Space / Ctrl+Enter / Cmd+Enter → Send
+        installSendKeys(editorPanel);          // Ctrl+Space / Ctrl+Enter → Send
 
         JSplitPane main = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                 new JScrollPane(table), editorPanel);
@@ -922,10 +920,10 @@ public final class UniqueRequestsViewer {
     }
 
     /**
-     * Binds <b>Send</b> to Ctrl+Space, Ctrl+Enter and Cmd/Ctrl+Enter at the window level, so it fires
-     * while focus is in the request editor (or anywhere in this view) and only while this view is on
-     * screen ({@code root.isShowing()} — so it never triggers from another Burp tab). macOS reserves
-     * Ctrl+Space for input-source switching, so <b>Cmd+Enter</b> is offered as a reliable alternative.
+     * Binds <b>Send</b> to Ctrl+Space and Ctrl+Enter. Ctrl+Space goes through a
+     * {@link KeyboardFocusManager} dispatcher (fires before macOS's Input Method framework
+     * consumes it for input-source switching — same approach Burp Repeater uses).
+     * Ctrl+Enter uses the standard {@code WHEN_IN_FOCUSED_WINDOW} input map.
      */
     private void installSendKeys(JComponent c) {
         c.getActionMap().put("dedupe-send", new AbstractAction() {
@@ -934,10 +932,16 @@ public final class UniqueRequestsViewer {
             }
         });
         InputMap im = c.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
-        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
         im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
-        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER,
-                Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()), "dedupe-send"); // Cmd+Enter on macOS
+
+        KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(e -> {
+            if (e.getID() != KeyEvent.KEY_PRESSED) return false;
+            if (e.getKeyCode() != KeyEvent.VK_SPACE) return false;
+            if ((e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) == 0) return false;
+            if (!root.isShowing()) return false;
+            SwingUtilities.invokeLater(this::sendEditedRequest);
+            return true;
+        });
     }
 
     /** All currently selected rows (in view order), skipping nulls. Empty if nothing is selected. */

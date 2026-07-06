@@ -140,7 +140,7 @@ An always-on, auto-refreshing feed of **only** the `[DEDUPE] UNIQUE` requests. N
 - **Live export → file** — mirrors the live feed to `~/.burp-dedupe/<project>/live-unique.http` and `selection.http`.
 - **Filter** — substring or regex search across all columns and full request/response body.
 
-**Editor pane (below table):** Split request/response viewers with an **inline Repeater** — select a row to load it, edit the request on the left, **Send** (Ctrl+Space / Cmd+Enter), see the response on the right with status/length/timing. Reissued requests land in Logger, not Proxy history.
+**Editor pane (below table):** Split request/response viewers with an **inline Repeater** — select a row to load it, edit the request on the left, **Send** (Ctrl+Space), see the response on the right with status/length/timing. Reissued requests land in Logger, not Proxy history.
 
 ---
 
@@ -270,9 +270,9 @@ The Match & Replace dialog is **non-modal** — it stays open after sending so y
 
 ## Inline Repeater
 
-Edit and resend any logged unique without leaving the view. Select a row in the Dedupe Live table or unique-requests window to load it into the editable request editor beneath the table. Tweak the request, then **Send ▶** — or **Ctrl+Space** / **Cmd+Enter**.
+Edit and resend any logged unique without leaving the view. Select a row in the Dedupe Live table or unique-requests window to load it into the editable request editor beneath the table. Tweak the request, then **Send ▶** — or **Ctrl+Space** (same shortcut as Burp Repeater). Ctrl+Enter also works as a secondary shortcut.
 
-The response shows on the right with a status / length / timing line. Uses Burp's HTTP client, so reissued requests land in **Logger**, not Proxy history. On macOS, Ctrl+Space may be reserved for input-source switching — use **Cmd+Enter** there.
+The response shows on the right with a status / length / timing line. Uses Burp's HTTP client, so reissued requests land in **Logger**, not Proxy history.
 
 ---
 
