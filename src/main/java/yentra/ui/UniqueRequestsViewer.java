@@ -2352,12 +2352,17 @@ private HttpRequest convert(HttpRequest req, String targetMethod) {
         }
 
         Object json = null;
-        String contentType = safe(() -> { try { return req.headerValue("Content-Type"); } catch (RuntimeException e) { return ""; } });
-        boolean isJson = contentType.toLowerCase().contains("json");
+        String contentType = "";
+        try {
+            for (HttpHeader h : req.headers()) {
+                if ("Content-Type".equalsIgnoreCase(h.name())) { contentType = h.value().toLowerCase(); break; }
+            }
+        } catch (RuntimeException ignored) {}
+        String stripped = body.strip();
+        boolean isJson = contentType.contains("json") || stripped.startsWith("{") || stripped.startsWith("[");
 
         if (isJson) {
             try {
-                String stripped = body.strip();
                 json = parseJson(stripped);
             } catch (RuntimeException e) {
                 api.logging().logToError("[yentra] JSON parse failed: " + e.getMessage());
