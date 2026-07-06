@@ -2382,39 +2382,48 @@ private HttpRequest convertMethod(HttpRequest req, String targetMethod) {
         }
 
         Object json = null;
-        String contentType = "";
-        try {
-            for (HttpHeader h : req.headers()) {
-                if ("Content-Type".equalsIgnoreCase(h.name())) { contentType = h.value().toLowerCase(); break; }
-            }
-        } catch (RuntimeException ignored) {}
         String stripped = body.strip();
-        boolean isJson = contentType.contains("json") || stripped.startsWith("{") || stripped.startsWith("[");
+        boolean looksLikeData = stripped.startsWith("{") || stripped.startsWith("[")
+                || stripped.contains(":");
 
-        if (isJson) {
+        if (looksLikeData) {
             try {
                 json = parseJson(stripped);
             } catch (RuntimeException e) {
-                api.logging().logToError("[yentra] JSON parse failed: " + e.getMessage());
-                return null;
+                try {
+                    json = parseJson(sanitizeJson(stripped));
+                } catch (RuntimeException e2) {
+                    api.logging().logToOutput("[yentra] JSON parse failed, converting method-only: " + e2.getMessage());
+                    json = null;
+                }
             }
         }
 
         HttpRequest out = req;
-        if ("GET".equalsIgnoreCase(targetMethod) && json != null) {
-            List<KeyValue> flat = flattenJson(json);
-            String qs = toQueryString(flat);
-            String path = out.path();
-            int qi = path.indexOf('?');
-            String base = qi >= 0 ? path.substring(0, qi) : path;
-            out = out.withPath(base + (qs.isEmpty() ? "" : "?" + qs));
+        if ("GET".equalsIgnoreCase(targetMethod)) {
+            if (json != null) {
+                List<KeyValue> flat = flattenJson(json);
+                String qs = toQueryString(flat);
+                String path = out.path();
+                int qi = path.indexOf('?');
+                String base = qi >= 0 ? path.substring(0, qi) : path;
+                out = out.withPath(base + (qs.isEmpty() ? "" : "?" + qs));
+            }
             out = out.withMethod("GET");
             out = out.withBody("");
             if (out.hasHeader("Content-Type")) out = out.withRemovedHeader("Content-Type");
+            if (out.hasHeader("Content-Length")) out = out.withRemovedHeader("Content-Length");
         } else {
             out = swapMethod(out, targetMethod);
         }
         return out;
+    }
+
+    private static String sanitizeJson(String s) {
+        s = s.replace('\'', '"');
+        s = s.replaceAll(",\\s*]", "]");
+        s = s.replaceAll(",\\s*}", "}");
+        return s;
     }
 
     private static HttpRequest swapMethod(HttpRequest req, String targetMethod) {
