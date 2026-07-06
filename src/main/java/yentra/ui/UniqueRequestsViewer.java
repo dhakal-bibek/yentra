@@ -735,10 +735,14 @@ public final class UniqueRequestsViewer {
         });
         filterField.addFocusListener(new java.awt.event.FocusAdapter() {
             @Override public void focusLost(java.awt.event.FocusEvent e) {
-                SwingUtilities.invokeLater(() -> {
-                    if (filterPopup == null || filterPopup.getMousePosition() == null && !filterField.isFocusOwner())
-                        hideFilterPopup();
+                Timer t = new Timer(150, ev -> {
+                    if (filterPopup == null || !filterPopup.isVisible()) return;
+                    if (filterPopup.getMousePosition() != null) return;
+                    if (filterField.isFocusOwner()) return;
+                    hideFilterPopup();
                 });
+                t.setRepeats(false);
+                t.start();
             }
         });
         filterField.addMouseListener(new java.awt.event.MouseAdapter() {
@@ -768,10 +772,16 @@ public final class UniqueRequestsViewer {
         if (ci < 0 || ci >= paletteItems.size()) return;
         PaletteItem item = paletteItems.get(ci).items().get(ii);
         if (item.prefix() != null) {
-            String cur = filterField.getText();
-            int lastSpace = cur.lastIndexOf(' ');
-            if (lastSpace >= 0) cur = cur.substring(lastSpace + 1);
-            filterField.setText((lastSpace >= 0 ? filterField.getText().substring(0, lastSpace + 1) : "") + item.prefix());
+            String current = filterField.getText().trim();
+            int lastSpace = current.lastIndexOf(' ');
+            String before = lastSpace >= 0 ? current.substring(0, lastSpace + 1) : "";
+            String lastWord = lastSpace >= 0 ? current.substring(lastSpace + 1) : current;
+            int colonIdx = lastWord.indexOf(':');
+            if (colonIdx >= 0) {
+                filterField.setText(current + " " + item.prefix());
+            } else {
+                filterField.setText(before + item.prefix());
+            }
             if (item.prefix().endsWith(":") && !item.placeholder().isEmpty()) {
                 hideFilterPopup();
                 resizePopupForInline(item.prefix() + item.placeholder());
