@@ -26,9 +26,12 @@ import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
+import javax.swing.JSeparator;
 import javax.swing.KeyStroke;
 import javax.swing.JSplitPane;
 import javax.swing.JTable;
@@ -70,9 +73,13 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
+import java.util.function.BiConsumer;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -93,7 +100,7 @@ import java.util.regex.PatternSyntaxException;
  *
  * <p>Must be constructed on the Swing EDT — it creates Montoya editor components.
  */
-final class UniqueRequestsViewer {
+public final class UniqueRequestsViewer {
 
     private final MontoyaApi api;
     private final String baseTitle;
@@ -107,13 +114,16 @@ final class UniqueRequestsViewer {
     private final JTextField filterField = new JTextField(26);
     private final JCheckBox regexBox = new JCheckBox("regex");
     private final JCheckBox inScopeBox = new JCheckBox("In-scope only");
+    private final JCheckBox sharedOnlyBox = new JCheckBox("Shared only");
     private final JLabel status = new JLabel(" ");
     /** Live mode: proxy ids already collected, by either path (so neither push nor poll re-adds one). Concurrent: written from the proxy thread (push) and the poll thread. */
     private final Set<Integer> seenIds = ConcurrentHashMap.newKeySet();
     /** Live mode: cross-path dedup by request identity — guards against push/poll double-add and re-stamps that change the proxy id. */
     private final Set<String> liveKeys = ConcurrentHashMap.newKeySet();
-    /** Live mode: ids examined and found NOT unique — skipped on later ticks; cleared periodically for late stamps. */
-    private final Set<Integer> examinedNonUnique = new HashSet<>();
+    /** Live mode: ids examined and found NOT unique — skipped on later ticks; cleared periodically for late stamps. Thread-safe (poll + rescan run concurrently). */
+    private final Set<Integer> examinedNonUnique = ConcurrentHashMap.newKeySet();
+    /** Live mode: highest proxy history id we've scanned — lets incremental polls skip everything below it. */
+    private volatile int maxScannedId = -1;
     /** Live mode: unsubscribe from the push feed on dispose/unload (null for the on-demand pop-up). */
     private Runnable feedUnsub;
     private int ticksUntilFullRescan = FULL_RESCAN_TICKS;
@@ -122,8 +132,32 @@ final class UniqueRequestsViewer {
     /** Consecutive live-poll failures; a stale API (extension reloaded) trips a self-stop. */
     private volatile int liveFailures = 0;
     private static final int MAX_LIVE_FAILURES = 3;
-    private static final int POLL_INTERVAL_MS = 600;   // snappy live feed without hammering api.proxy().history()
-    private static final int FULL_RESCAN_TICKS = 50;   // ~every 30s re-examine all entries (catches "Stamp history")
+    private static final int POLL_INTERVAL_MS = 1500;  // smooth — 1.5s is snappy enough and won't thrash history()
+    private static final int FULL_RESCAN_TICKS = 40;   // ~every 60s re-examine all entries (catches "Stamp history")
+
+    /** Optional handler that forwards requests to the Live Share tab (request + response + caption). */
+    private static volatile BiConsumer<HttpRequestResponse, String> shareHandler;
+
+    /** When true every new UNIQUE that arrives is automatically forwarded to connected peers. */
+    private static volatile boolean autoShare;
+
+    /** Bounded executor for auto-sharing uniques to peers — prevents thread explosion under heavy traffic. */
+    private static final ThreadPoolExecutor SHARE_EXECUTOR = new ThreadPoolExecutor(
+            1, 2, 30, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(100),
+            r -> { Thread t = new Thread(r, "liveshare-auto"); t.setDaemon(true); return t; },
+            new ThreadPoolExecutor.DiscardPolicy()
+    );
+
+    /** Set the handler invoked when a request should be shared. Pass {@code null} to unset. */
+    public static void setShareHandler(BiConsumer<HttpRequestResponse, String> handler) {
+        shareHandler = handler;
+    }
+
+    /** Toggle automatic sharing of every new unique request. */
+    public static void setAutoShare(boolean active) {
+        autoShare = active;
+    }
 
     /** Live export: mirror every collected unique request to a file Claude Code can read. */
     private final JCheckBox cbLiveExport = new JCheckBox("Live export → file", false);
@@ -165,6 +199,7 @@ final class UniqueRequestsViewer {
             scheduleLiveExport(); // refresh selection.http on selection change
         });
         applyColumnWidths(table);
+        table.setComponentPopupMenu(buildTablePopup());
 
         JSplitPane editors = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
                 requestEditor.uiComponent(), responseEditor.uiComponent());
@@ -234,6 +269,24 @@ final class UniqueRequestsViewer {
         repeater.setToolTipText("Send the selected request(s) to new Repeater tabs (named by method + path).");
         repeater.addActionListener(e -> sendSelectedToRepeater());
 
+        JButton shareBtn = new JButton("Share");
+        shareBtn.setToolTipText("<html>Share the selected request with connected peers.<br>"
+                + "Open the <b>Dedupe Share</b> tab, start a server or connect to a friend first.</html>");
+        shareBtn.addActionListener(e -> {
+            List<HttpRequestResponse> sel = selectedRows();
+            if (sel.isEmpty()) { status.setText("Select a request first."); return; }
+            HttpRequestResponse rr = sel.get(0);
+            if (rr == null || rr.request() == null) return;
+            BiConsumer<HttpRequestResponse, String> handler = shareHandler;
+            if (handler != null) {
+                String caption = safeReqLine(rr.request());
+                handler.accept(rr, caption);
+                status.setText("Shared: " + caption);
+            } else {
+                status.setText("No Live Share — open the Dedupe Share tab, start a server or connect to a friend.");
+            }
+        });
+
         JButton save = new JButton("Save request(s) for AI");
         save.setToolTipText("Save the selected request(s) and their responses into one .http file "
                 + "for Claude Code / AI to read. Ctrl/Cmd- or Shift-click to select several.");
@@ -278,9 +331,15 @@ final class UniqueRequestsViewer {
                 + "(Toggle to re-apply after changing scope.)");
         inScopeBox.addItemListener(e -> applyFilter());
 
+        sharedOnlyBox.setToolTipText("Show only requests that arrived via Live Share from a peer. "
+                + "Combines with the other filters.");
+        sharedOnlyBox.addItemListener(e -> applyFilter());
+
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
         bar.add(repeater);
+        bar.add(shareBtn);
         bar.add(inScopeBox);
+        bar.add(sharedOnlyBox);
         bar.add(save);
         bar.add(magic);
         bar.add(matchReplace);
@@ -293,12 +352,16 @@ final class UniqueRequestsViewer {
     }
 
     /**
-     * Filters the table: an optional <b>In-scope only</b> gate (request URL in Burp's Target scope)
-     * AND the text box, which matches across all columns — substring by default, regex when ticked,
-     * always case-insensitive. With neither active, every row shows.
+     * Filters the table: optional <b>Shared only</b>, <b>In-scope only</b> gates,
+     * AND the text box, which matches across all columns — substring by default,
+     * regex when ticked, always case-insensitive. With none active, every row shows.
      */
     private void applyFilter() {
-        List<RowFilter<Object, Object>> filters = new ArrayList<>(2);
+        List<RowFilter<Object, Object>> filters = new ArrayList<>(3);
+
+        if (sharedOnlyBox.isSelected()) {
+            filters.add(sharedRowFilter());
+        }
 
         if (inScopeBox.isSelected()) {
             filters.add(scopeRowFilter());
@@ -312,7 +375,7 @@ final class UniqueRequestsViewer {
                     filters.add(searchRowFilter(blob -> p.matcher(blob).find()));
                 } catch (PatternSyntaxException ex) {
                     status.setText("Invalid regex: " + ex.getMessage());
-                    return; // leave the previous filter in place rather than clearing it
+                    return;
                 }
             } else {
                 String needle = text.toLowerCase(Locale.ROOT);
@@ -342,6 +405,16 @@ final class UniqueRequestsViewer {
         };
     }
 
+    /** A row filter that keeps only requests that arrived via Live Share. */
+    private RowFilter<Object, Object> sharedRowFilter() {
+        return new RowFilter<>() {
+            @Override public boolean include(Entry<? extends Object, ? extends Object> entry) {
+                Object id = entry.getIdentifier();
+                return id instanceof Integer && rowIsShared((Integer) id);
+            }
+        };
+    }
+
     /** A row filter that keeps only rows whose request URL is in Burp's Target scope. */
     private RowFilter<Object, Object> scopeRowFilter() {
         return new RowFilter<>() {
@@ -350,6 +423,12 @@ final class UniqueRequestsViewer {
                 return id instanceof Integer && rowInScope((Integer) id);
             }
         };
+    }
+
+    /** True iff the model row is a shared request received via Live Share. */
+    private boolean rowIsShared(int modelRow) {
+        Row row = model.rowAt(modelRow);
+        return row != null && row.shared;
     }
 
     /** True iff the model row's request URL is in Burp's Target scope. Uses the row's cached URL. */
@@ -463,22 +542,48 @@ final class UniqueRequestsViewer {
 
     /**
      * Push path: a freshly-classified UNIQUE arrives directly from {@link DedupeProxyHandler} (on the
-     * proxy thread, off the EDT). Records the proxy id so the history back-fill won't re-add it, dedupes
-     * by request identity, parses the row off the EDT, then appends on the EDT. Never throws back into
-     * the proxy hot path.
+     * proxy thread, off the EDT). Dedupes by request identity, parses the row off the EDT, then
+     * appends on the EDT. Never throws back into the proxy hot path.
+     *
+     * <p>{@code seenIds} is populated only <em>after</em> the row is successfully parsed and queued
+     * for display — not before {@code claimLive}. Previously, adding the proxy id to {@code seenIds}
+     * before {@code claimLive} meant that if {@code claimLive} rejected the entry (a false-positive
+     * liveKey collision), the poll path would skip it forever, permanently losing a genuinely UNIQUE
+     * request from both paths.
      */
     private void onLiveUnique(HttpRequestResponse rr, int proxyId) {
+        String claimedKey = null;
         try {
             if (rr == null || rr.request() == null) return;
-            if (proxyId >= 0) seenIds.add(proxyId);   // poll will now skip this entry
-            if (!claimLive(rr)) return;               // already shown (e.g. just back-filled by the poll)
-            Row row = Row.of(rr);                      // parse off the EDT
+            String key = liveKey(rr);
+            if (key != null) {
+                if (!liveKeys.add(key)) return;          // already shown (e.g. just back-filled by the poll)
+                claimedKey = key;                          // remember so we can undo on failure
+            }
+            Row row = Row.of(rr);                          // parse off the EDT
+            // Row parsed successfully — now safe to mark as seen so the poll won't re-add it.
+            if (proxyId >= 0) seenIds.add(proxyId);
             SwingUtilities.invokeLater(() -> {
                 addResults(java.util.Collections.singletonList(row));
                 log("UNIQUE  " + safeReqLine(rr.request()));
             });
+            // Auto-forward to connected peers when live share is active.
+            // Only forward real proxy entries (proxyId >= 0), not requests that arrived via
+            // Live Share from another peer — otherwise we'd loop forever.
+            if (autoShare && proxyId >= 0) {
+                BiConsumer<HttpRequestResponse, String> handler = shareHandler;
+                if (handler != null) {
+                    String caption = safeReqLine(rr.request());
+                    SHARE_EXECUTOR.execute(() -> handler.accept(rr, caption));
+                }
+            }
         } catch (RuntimeException e) {
             safeLogError("[burp-dedupe] live push add failed: " + e);
+            // Row.of or invokeLater failed — undo the liveKey claim so the poll path can retry.
+            // seenIds was not yet added (it comes after Row.of), so the poll will re-examine.
+            if (claimedKey != null) {
+                try { liveKeys.remove(claimedKey); } catch (RuntimeException ignored) {}
+            }
         }
     }
 
@@ -488,16 +593,42 @@ final class UniqueRequestsViewer {
         return key == null || liveKeys.add(key); // Set.add → true when newly added
     }
 
-    /** A lightweight identity key for cross-path dedup: method + URL + request body length. */
+    /**
+     * A lightweight identity key for cross-path dedup: method + URL + body hash + response status.
+     *
+     * <p>Previously this used only the body <em>length</em>, which was too coarse: two genuinely
+     * different requests (same URL, same body length, but different body content — or same URL but
+     * different response status codes when the role-port cross-identity path isn't active) collided
+     * into one key. The second UNIQUE was silently rejected by {@link #claimLive} and, because
+     * {@code seenIds} was already populated, permanently lost from both the push and poll paths.
+     * Including a body content hash and the response status code makes false-positive collisions
+     * effectively impossible while keeping the key cheap to compute.
+     */
     private static String liveKey(HttpRequestResponse rr) {
         try {
             HttpRequest req = rr.request();
             if (req == null) return null;
             String method = req.method() == null ? "" : req.method();
             String url = req.url() == null ? "" : req.url();
+            String bodyHash;
             int bodyLen;
-            try { bodyLen = req.body() == null ? 0 : req.body().length(); } catch (RuntimeException e) { bodyLen = -1; }
-            return method + " " + url + " #" + bodyLen;
+            try {
+                String body = req.bodyToString();
+                bodyLen = body == null ? 0 : body.length();
+                bodyHash = body == null ? "" : Integer.toHexString(body.hashCode());
+            } catch (RuntimeException e) {
+                bodyLen = -1;
+                bodyHash = "err";
+            }
+            int status = -1;
+            try {
+                if (rr.hasResponse() && rr.response() != null) {
+                    status = rr.response().statusCode();
+                }
+            } catch (RuntimeException e) {
+                status = -2;
+            }
+            return method + " " + url + " #" + bodyLen + ":" + bodyHash + " " + status;
         } catch (RuntimeException e) {
             return null;
         }
@@ -566,6 +697,7 @@ final class UniqueRequestsViewer {
                     ticksUntilFullRescan = FULL_RESCAN_TICKS;
                     fullPass = true;
                 }
+                int scanFloor = fullPass ? -1 : maxScannedId; // incremental: skip ids we've already scanned past
                 List<ProxyHttpRequestResponse> history = api.proxy().history();
                 liveFailures = 0; // a good read clears the stale-API failure streak
                 List<Row> batch = new ArrayList<>();
@@ -573,6 +705,8 @@ final class UniqueRequestsViewer {
                 for (ProxyHttpRequestResponse h : history) {
                     if (h == null || h.request() == null) continue;
                     int id = h.id();
+                    if (id <= scanFloor) continue;          // incremental: we've already processed everything below the floor
+                    if (id > maxScannedId) maxScannedId = id; // advance the high-water mark
                     if (seenIds.contains(id) || examinedNonUnique.contains(id)) continue; // already handled
                     try {
                         String cat = noteCategory(h.annotations());
@@ -584,11 +718,26 @@ final class UniqueRequestsViewer {
                             case "OTHER"  -> nOther++;
                             default       -> nNoNote++;
                         }
-                        if (!"UNIQUE".equals(cat)) { examinedNonUnique.add(id); continue; }
-                        seenIds.add(id);
+                        if (!"UNIQUE".equals(cat)) {
+                            // Only cache a verdict we actually recognise as non-unique (DUPE/SKIP/OVRF).
+                            // "NONE" (no [DEDUPE] note) and "OTHER" (non-dedupe note, e.g. a role-port
+                            // tag before the response handler stamped it) might not have been classified
+                            // yet — don't cache them, so the next poll re-examines until a real verdict
+                            // lands. This prevents genuinely UNIQUE requests from being hidden for up to
+                            // a full rescan cycle (~30s) just because the poll beat the response handler.
+                            if (!"NONE".equals(cat) && !"OTHER".equals(cat)) {
+                                examinedNonUnique.add(id);
+                            }
+                            continue;
+                        }
                         HttpResponse resp = h.hasResponse() && h.response() != null ? h.response() : HttpResponse.httpResponse();
                         HttpRequestResponse rr = HttpRequestResponse.httpRequestResponse(h.request(), resp, h.annotations());
-                        if (claimLive(rr)) batch.add(Row.of(rr)); // skip if the push path already added it
+                        boolean claimed = claimLive(rr);
+                        // Mark as seen regardless of claimLive result: if claimed, the row is in the
+                        // batch; if not, it was already added by the push path (genuine duplicate).
+                        // With a robust liveKey, false-positive collisions are effectively impossible.
+                        seenIds.add(id);
+                        if (claimed) batch.add(Row.of(rr)); // skip if the push path already added it
                     } catch (RuntimeException perEntry) {
                         // One malformed entry must never abort the whole scan — which would otherwise be
                         // caught below as a poll "failure" and, after a few ticks, self-stop the feed.
@@ -597,6 +746,17 @@ final class UniqueRequestsViewer {
                     }
                 }
                 if (!batch.isEmpty()) {
+                    if (autoShare) {
+                        BiConsumer<HttpRequestResponse, String> handler = shareHandler;
+                        if (handler != null) {
+                            for (Row r : batch) {
+                                try {
+                                    String caption = safeReqLine(r.rr.request());
+                                    SHARE_EXECUTOR.execute(() -> handler.accept(r.rr, caption));
+                                } catch (RuntimeException ignored) {}
+                            }
+                        }
+                    }
                     SwingUtilities.invokeLater(() -> {
                         addResults(batch);
                         if (batch.size() <= 12) {
@@ -817,6 +977,76 @@ final class UniqueRequestsViewer {
         String caption = (safe(req::method) + " " + safe(req::path)).trim();
         if (caption.isEmpty()) return "dedupe";
         return caption.length() > 80 ? caption.substring(0, 80) : caption;
+    }
+
+    private JPopupMenu buildTablePopup() {
+        JPopupMenu popup = new JPopupMenu();
+
+        JMenuItem repeaterItem = new JMenuItem("Send to Repeater");
+        repeaterItem.addActionListener(e -> sendSelectedToRepeater());
+        popup.add(repeaterItem);
+
+        JMenuItem shareItem = new JMenuItem("Share");
+        shareItem.addActionListener(e -> {
+            List<HttpRequestResponse> sel = selectedRows();
+            if (sel.isEmpty()) { status.setText("Select a request first."); return; }
+            HttpRequestResponse rr = sel.get(0);
+            if (rr == null || rr.request() == null) return;
+            BiConsumer<HttpRequestResponse, String> handler = shareHandler;
+            if (handler != null) {
+                String caption = safeReqLine(rr.request());
+                handler.accept(rr, caption);
+                status.setText("Shared: " + caption);
+            } else {
+                status.setText("No Live Share — open the Dedupe Share tab first.");
+            }
+        });
+        popup.add(shareItem);
+
+        popup.add(new JSeparator());
+
+        JMenuItem removeHostFromScope = new JMenuItem("Remove host from scope");
+        removeHostFromScope.addActionListener(e -> removeSelectedFromScope(true));
+        popup.add(removeHostFromScope);
+
+        JMenuItem removePathFromScope = new JMenuItem("Remove path from scope");
+        removePathFromScope.addActionListener(e -> removeSelectedFromScope(false));
+        popup.add(removePathFromScope);
+
+        return popup;
+    }
+
+    private void removeSelectedFromScope(boolean hostOnly) {
+        List<HttpRequestResponse> sel = selectedRows();
+        if (sel.isEmpty()) { status.setText("Select one or more requests first."); return; }
+
+        java.util.LinkedHashSet<String> urls = new java.util.LinkedHashSet<>();
+        for (HttpRequestResponse rr : sel) {
+            if (rr == null || rr.request() == null) continue;
+            String scopeUrl = DedupeContextMenu.scopeUrlFor(rr.request(), hostOnly);
+            if (scopeUrl != null) urls.add(scopeUrl);
+        }
+        if (urls.isEmpty()) return;
+
+        String label = hostOnly ? "host(s)" : "path prefix(es)";
+        int answer = JOptionPane.showConfirmDialog(table,
+                "Exclude the following " + label + " from Target scope?\n\n"
+                        + String.join("\n", urls),
+                "Dedupe — Remove from scope", JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+
+        int done = 0;
+        for (String url : urls) {
+            try {
+                api.scope().excludeFromScope(url);
+                done++;
+            } catch (RuntimeException ex) {
+                api.logging().logToError("[burp-dedupe] scope exclude failed for " + url + ": " + ex);
+            }
+        }
+        status.setText("Excluded " + done + " " + label + " from scope.");
+        api.logging().logToOutput("[burp-dedupe] excluded " + done + " " + label + " from scope.");
     }
 
     /** Saves all selected requests (and their responses) into one .http file the user chooses. */
@@ -1098,12 +1328,14 @@ final class UniqueRequestsViewer {
         g.gridx = 1; form.add(scope, g);
 
         JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(table), "Match & Replace — IDOR");
-        dialog.setModal(true);
+        dialog.setModal(false);
 
-        JButton send = new JButton("Replace & send " + sel.size() + " request(s)");
+        JButton send = new JButton("Replace & send");
         JButton cancel = new JButton("Cancel");
         cancel.addActionListener(ev -> dialog.dispose());
         send.addActionListener(ev -> {
+            List<HttpRequestResponse> currentSel = selectedRows();
+            if (currentSel.isEmpty()) { warn(dialog, "Select one or more requests first."); return; }
             String match = matchField.getText();
             if (match == null || match.isEmpty()) { warn(dialog, "Enter the text to match."); return; }
             boolean inPath = cbPath.isSelected();
@@ -1121,13 +1353,12 @@ final class UniqueRequestsViewer {
             prefs.setBoolean(PREF_MR_PATH, inPath);
             prefs.setBoolean(PREF_MR_BODY, inBody);
             prefs.setBoolean(PREF_MR_REGEX, regex);
-            dialog.dispose();
 
             String scopeLabel = (inPath && inBody) ? "path+body" : inPath ? "path/query" : "body";
-            streamReissue(sel, "Match & Replace results",
+            streamReissue(currentSel, "Match & Replace results",
                     req -> applyMatchReplace(req, match, replace, inPath, inBody, regex),
                     "Match & Replace — \"" + match + "\" -> \"" + replace + "\" in " + scopeLabel
-                            + (regex ? " (regex)" : "") + " across " + sel.size() + " request(s)");
+                            + (regex ? " (regex)" : "") + " across " + currentSel.size() + " request(s)");
         });
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
@@ -1515,6 +1746,9 @@ final class UniqueRequestsViewer {
         };
     }
 
+    /** Shared requests (received via Live Share) get this highlight colour in the Dedupe Live table. */
+    private static final HighlightColor SHARED_COLOR = HighlightColor.MAGENTA;
+
     /**
      * One captured row with its display cells, highlight colour and URL precomputed <em>off the EDT</em>
      * (in {@link #of}). The table then paints from plain fields and never parses a Montoya request or
@@ -1527,13 +1761,15 @@ final class UniqueRequestsViewer {
         final HighlightColor color;
         final String url;              // cached for the In-scope filter (no per-keystroke re-parse)
         final String search;           // lowercased: columns + full request + some response body
+        final boolean shared;          // true if this request arrived via Live Share
 
-        private Row(HttpRequestResponse rr, String[] cells, HighlightColor color, String url, String search) {
+        private Row(HttpRequestResponse rr, String[] cells, HighlightColor color, String url, String search, boolean shared) {
             this.rr = rr;
             this.cells = cells;
             this.color = color;
             this.url = url;
             this.search = search;
+            this.shared = shared;
         }
 
         /** Parses everything the table shows (and searches) once, here (call off the EDT for big batches). */
@@ -1549,7 +1785,8 @@ final class UniqueRequestsViewer {
             c[6] = safe(() -> hasResp ? mimeOf(rr.response()) : "");
             c[7] = safe(() -> notesOf(rr));
             String url = safe(() -> req != null ? req.url() : "");
-            return new Row(rr, c, colorOf(rr), url, buildSearchBlob(rr, req, hasResp, c));
+            HighlightColor color = colorOf(rr);
+            return new Row(rr, c, color, url, buildSearchBlob(rr, req, hasResp, c), color == SHARED_COLOR);
         }
 
         /**

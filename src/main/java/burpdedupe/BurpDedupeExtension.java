@@ -8,6 +8,7 @@ import burp.api.montoya.ui.hotkey.HotKeyContext;
 import burp.api.montoya.ui.hotkey.HotKeyHandler;
 import burpdedupe.core.DedupeEngine;
 import burpdedupe.core.SignatureConfig;
+import burpdedupe.liveshare.LiveShareTab;
 import burpdedupe.proxy.DedupeProxyHandler;
 import burpdedupe.proxy.HistoryStamper;
 import burpdedupe.proxy.PortHighlightHandler;
@@ -15,6 +16,9 @@ import burpdedupe.proxy.UniqueFeed;
 import burpdedupe.ui.BodyOnlyResponseEditor;
 import burpdedupe.ui.DedupeContextMenu;
 import burpdedupe.ui.DedupeTab;
+import burpdedupe.ui.UniqueRequestsViewer;
+
+import java.util.function.BiConsumer;
 
 import javax.swing.SwingUtilities;
 import java.util.List;
@@ -53,6 +57,17 @@ public class BurpDedupeExtension implements BurpExtension {
 
             // Live unique history as its own always-on Burp tab (no pop-up needed; Ctrl+9 still works).
             api.userInterface().registerSuiteTab("Dedupe Live", DedupeTab.liveUniqueComponent(api, liveFeed));
+
+            // Live Share: host a server or connect to a friend to share requests in real time.
+            LiveShareTab shareTab = new LiveShareTab(api, liveFeed);
+            api.userInterface().registerSuiteTab("Dedupe Share", shareTab.component());
+            UniqueRequestsViewer.setShareHandler((rr, caption) -> shareTab.shareImmediately(rr, caption));
+
+            // Tear down server/client connections on extension unload.
+            api.extension().registerUnloadingHandler(() -> {
+                UniqueRequestsViewer.setShareHandler(null);
+                UniqueRequestsViewer.setAutoShare(false);
+            });
 
             DedupeContextMenu contextMenu = new DedupeContextMenu(api, engine, stamper, tab::currentOverrides);
             api.userInterface().registerContextMenuItemsProvider(contextMenu);

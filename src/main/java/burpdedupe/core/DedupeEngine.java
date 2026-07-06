@@ -213,6 +213,14 @@ public final class DedupeEngine {
                 || cfg.includeBodyParamNames || cfg.includeBodyParamValues) {
             addParams(h, req, cfg);
         }
+        // Always fold a digest of the raw body into the signature when body params are enabled.
+        // This ensures requests with different body content (e.g. {"id":1} vs {"id":2}) always
+        // get distinct signatures, even when includeBodyParamValues is off or Montoya can't parse
+        // the body into individual parameters. Without this, two POSTs to the same endpoint with
+        // different JSON bodies collapse into one signature — a false DUPE.
+        if (cfg.includeBodyParamNames || cfg.includeBodyParamValues) {
+            addBodyDigest(h, req);
+        }
         if (!cfg.includeHeaders.isEmpty()) {
             addHeaders(h, req, cfg);
         }
@@ -308,6 +316,30 @@ public final class DedupeEngine {
         if (v == null) return "";
         // Cap value length so huge JSON blobs don't dominate digest cost.
         return v.length() > 256 ? v.substring(0, 256) : v;
+    }
+
+    /** Cap on how many body bytes are hashed — enough to distinguish requests, cheap on the hot path. */
+    private static final int BODY_DIGEST_CAP = 4096;
+
+    /**
+     * Folds a digest of the raw request body into the signature. This is the backstop that
+     * guarantees two requests with different bodies never collide into a false DUPE, regardless
+     * of whether Montoya parsed the body into parameters or whether value-inclusion is on.
+     * Only the first {@value #BODY_DIGEST_CAP} bytes are hashed — enough to distinguish any
+     * realistic pair of API calls while keeping the hash cost negligible.
+     */
+    private static void addBodyDigest(Hasher h, HttpRequest req) {
+        try {
+            String body = req.bodyToString();
+            if (body == null || body.isEmpty()) {
+                h.field("B", "");
+                return;
+            }
+            int len = Math.min(body.length(), BODY_DIGEST_CAP);
+            h.field("B", Integer.toHexString(body.substring(0, len).hashCode()));
+        } catch (RuntimeException e) {
+            h.field("B", "err");
+        }
     }
 
     private static void addHeaders(Hasher h, HttpRequest req, SignatureConfig cfg) {

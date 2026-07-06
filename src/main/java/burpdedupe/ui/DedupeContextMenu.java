@@ -15,6 +15,8 @@ import burpdedupe.core.Signature;
 import burpdedupe.proxy.DedupeProxyHandler;
 import burpdedupe.proxy.HistoryStamper;
 
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -25,11 +27,13 @@ import javax.swing.SwingUtilities;
 import java.awt.Component;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 /**
  * Adds a right-click "Dedupe" submenu to HTTP history (and any other context that
@@ -88,6 +92,16 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
                 "Send unique to Organizer (" + selected.size() + " selected)");
         sendUnique.addActionListener(e -> sendUniqueToOrganizer(selected));
         submenu.add(sendUnique);
+
+        submenu.addSeparator();
+
+        JMenuItem removeHostFromScope = new JMenuItem("Remove host from scope");
+        removeHostFromScope.addActionListener(e -> removeFromScope(selected, true));
+
+        JMenuItem removePathFromScope = new JMenuItem("Remove path from scope");
+        removePathFromScope.addActionListener(e -> removeFromScope(selected, false));
+        submenu.add(removeHostFromScope);
+        submenu.add(removePathFromScope);
 
         return List.of(submenu);
     }
@@ -381,5 +395,79 @@ public final class DedupeContextMenu implements ContextMenuItemsProvider {
             api.logging().logToError("[burp-dedupe] organizer tag failed: " + ex);
         }
         return tagged;
+    }
+
+    private void removeFromScope(List<HttpRequestResponse> selected, boolean hostOnly) {
+        LinkedHashSet<String> urls = new LinkedHashSet<>();
+        for (HttpRequestResponse rr : selected) {
+            if (rr == null || rr.request() == null) continue;
+            String scopeUrl = scopeUrlFor(rr.request(), hostOnly);
+            if (scopeUrl != null) urls.add(scopeUrl);
+        }
+        if (urls.isEmpty()) return;
+
+        String label = hostOnly ? "host(s)" : "path prefix(es)";
+        int answer = JOptionPane.showConfirmDialog(null,
+                "Exclude the following " + label + " from Target scope?\n\n"
+                        + urls.stream().collect(Collectors.joining("\n")),
+                "Dedupe — Remove from scope", JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+
+        int done = 0;
+        for (String url : urls) {
+            try {
+                api.scope().excludeFromScope(url);
+                done++;
+            } catch (RuntimeException ex) {
+                api.logging().logToError("[burp-dedupe] scope exclude failed for " + url + ": " + ex);
+            }
+        }
+        api.logging().logToOutput("[burp-dedupe] excluded " + done + " " + label + " from scope.");
+    }
+
+    public static String scopeUrlFor(HttpRequest req, boolean hostOnly) {
+        try {
+            URL url = new URL(req.url());
+            String scheme = url.getProtocol();
+            String host = url.getHost();
+            int port = url.getPort();
+            String portPart = port == -1 ? "" : ":" + port;
+            if (hostOnly) {
+                return scheme + "://" + host + portPart + "/";
+            }
+            String path = url.getPath();
+            if (path == null || path.isEmpty() || path.equals("/")) {
+                return scheme + "://" + host + portPart + "/";
+            }
+            path = path.replaceAll("/+$", "");
+            return scheme + "://" + host + portPart + path;
+        } catch (MalformedURLException e) {
+            try {
+                HttpRequest req2 = req;
+                String hostVal = null;
+                for (HttpHeader h : req2.headers()) {
+                    if ("Host".equalsIgnoreCase(h.name())) { hostVal = h.value(); break; }
+                }
+                if (hostVal == null) return null;
+                String scheme = req2.httpService() != null && req2.httpService().secure() ? "https" : "http";
+                String host = hostVal.contains(":") ? hostVal.substring(0, hostVal.indexOf(':')) : hostVal;
+                int port = req2.httpService() != null ? req2.httpService().port() : -1;
+                String portPart = (port == -1 || port == 80 || port == 443) ? "" : ":" + port;
+                if (hostOnly) {
+                    return scheme + "://" + host + portPart + "/";
+                }
+                String path = req2.path();
+                if (path == null || path.isEmpty() || path.equals("/")) {
+                    return scheme + "://" + host + portPart + "/";
+                }
+                int qIdx = path.indexOf('?');
+                if (qIdx >= 0) path = path.substring(0, qIdx);
+                path = path.replaceAll("/+$", "");
+                return scheme + "://" + host + portPart + path;
+            } catch (RuntimeException ex2) {
+                return null;
+            }
+        }
     }
 }
