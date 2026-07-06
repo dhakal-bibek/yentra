@@ -357,6 +357,8 @@ A confirmation dialog shows exactly what will be excluded. Multi-selection dedup
 | **Double-click → Repeater** | Any received request opens in a Burp Repeater tab with one double-click |
 | **500-entry log** | Scrollable list of all received requests with method + URL preview |
 
+![Live Share — server running on port 9999 with a client connected, sharing requests in real time](assets/live-share-connected.png)
+
 ### Self-Hosting the Relay
 
 ```bash
@@ -372,6 +374,8 @@ The relay is a lightweight Java HTTP server. Two peers connect to it with the sa
 - **Training / mentoring:** Senior tester shares live traffic with a junior in real time
 - **Distributed testing:** Two testers on different networks testing the same target simultaneously
 - **Demo / presentation:** Share your Burp session live without screen sharing
+
+![Received shared requests — double-click any entry to open in Repeater](assets/live-share-received.png)
 
 ---
 
