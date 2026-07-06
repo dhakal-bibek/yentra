@@ -1,229 +1,233 @@
 # Yentra
 
-Burp Suite extension (Montoya API) that turns noisy HTTP history into a **deduplicated, AI-ready** attack surface. It stamps every new proxy entry **UNIQUE** or **DUPE**, streams the unique ones into a live feed, color-codes attacker/victim traffic by listener port — a **port-based highlighter** (PwnFox-style, but keyed on the proxy listener port) built for **Android/iOS** multi-account testing — and hands the filtered set straight to **Claude Code / AI** through a file bridge, with **IDOR/BOLA** tooling built in.
-
-![Yentra — the Yentra Live feed with attacker (green) / victim (red) tagging and an inline Repeater](assets/dedupe-live.png)
+A premium Burp Suite extension that transforms noisy HTTP history into a deduplicated, AI-ready attack surface. Stamps every proxy entry **UNIQUE** or **DUPE**, streams uniques into a live feed, color-codes attacker/victim traffic by listener port, and bridges straight to AI — with IDOR/BOLA tooling, live peer sharing, and a Caido-style filter palette built in.
 
 ---
 
 ## Table of Contents
 
-- [Installation](#install-in-burp)
-- [Quick Start](#usage)
-- [Yentra Engine](#yentra-engine)
-- [Presets](#presets)
-- [Yentra Config Tab](#yentra-config-tab)
-- [Yentra Live Tab](#yentra-live-tab)
-- [Yentra Share Tab (Live Share)](#yentra-share-tab-live-share)
-- [Right-Click Actions (HTTP history / Site map)](#right-click-actions-http-history--site-map)
-- [Right-Click Popup (Yentra Live / Unique Requests table)](#right-click-popup-yentra-live--unique-requests-table)
-- [Remove from Scope](#remove-from-scope)
-- [IDOR / BOLA Tools](#idor--bola-tools)
-  - [Magic Cookie](#magic-cookie)
-  - [Match & Replace](#match--replace)
-- [Inline Repeater](#inline-repeater)
-- [Live Export (AI Bridge)](#live-export-ai-bridge)
-- [Case Manifest](#case-manifest-per-request)
-- [Body Only (Pretty JSON) Editor](#body-only-pretty-json-editor)
-- [Attacker / Victim Port Highlighting](#attacker--victim-port-highlighting)
-- [Header Overrides](#header-overrides)
-- [Notes / Edge Cases](#notes--edge-cases)
-- [Build](#build)
-- [Acknowledgements](#acknowledgements)
+1. [Installation](#installation)
+2. [Architecture Overview](#architecture-overview)
+3. [Yentra Config Tab](#yentra-config-tab)
+   - [Behavior & Signature Fields](#behavior--signature-fields)
+   - [Presets](#presets)
+   - [Stats & Header Overrides](#stats--header-overrides)
+   - [History Stamping](#history-stamping)
+4. [Yentra Live Tab](#yentra-live-tab)
+   - [Toolbar Actions](#toolbar-actions)
+   - [Inline Repeater](#inline-repeater)
+   - [Response Info Bar](#response-info-bar)
+   - [History Navigation](#history-navigation)
+5. [Bambda-Style Filter](#bambda-style-filter)
+   - [Prefix Tokens](#prefix-tokens)
+   - [Filter Chips](#filter-chips)
+   - [Command Palette](#command-palette)
+   - [Status Operators](#status-operators)
+6. [IDOR / BOLA Tools](#idor--bola-tools)
+   - [Magic Cookie](#magic-cookie)
+   - [Match & Replace](#match--replace)
+7. [Right-Click Actions](#right-click-actions)
+8. [Remove from Scope](#remove-from-scope)
+9. [Yentra Share (Live Share)](#yentra-share-live-share)
+10. [AI Bridge (Live Export)](#ai-bridge-live-export)
+11. [Attacker / Victim Port Highlighting](#attacker--victim-port-highlighting)
+12. [Body Only (Pretty JSON) Editor](#body-only-pretty-json-editor)
+13. [Keyboard Shortcuts](#keyboard-shortcuts)
+14. [Build](#build)
+15. [Acknowledgements](#acknowledgements)
 
 ---
 
-## Install in Burp
+## Installation
 
 1. Burp → **Extensions** → **Installed** → **Add**
 2. Extension type: **Java**
-3. Select `build/libs/yentra-0.1.0-SNAPSHOT.jar`
-4. Three new tabs appear: **Yentra**, **Yentra Live**, and **Yentra Share**.
+3. Select `yentra-0.1.0-SNAPSHOT.jar`
+4. Three tabs appear: **Yentra**, **Yentra Live**, **Yentra Share**
 
 ---
 
-## Usage
+## Architecture Overview
 
-1. Open the **Yentra** tab.
-2. Pick a preset (e.g. **Request smuggling** if you only care about path uniqueness).
-3. Hit **Apply** — this also resets the seen-set so verdicts stay consistent.
-4. Browse / replay traffic. New entries get stamped.
-5. In **HTTP history**, click the **Notes** column header to sort. All `[YENTRA] UNIQUE` rows cluster. Multi-select → send to your scanner / extension.
+Yentra registers a `ProxyResponseHandler` that intercepts every response entering HTTP history. Each request/response pair is classified by computing a **128-bit SHA-256-derived signature** from configurable request parts (method, host, path, params, status, headers). Signatures are stored in a `ConcurrentHashMap<Signature, AtomicInteger>` — fast, thread-safe, and memory-light.
 
----
+**Verdict system:**
 
-## Yentra Engine
+| Verdict | Notes Stamp | Meaning |
+|---|---|---|
+| `UNIQUE` | `[YENTRA] UNIQUE` | First occurrence of this signature |
+| `DUPE` | `[YENTRA] DUPE xN` | Seen N times before |
+| `SKIP` | `[YENTRA] SKIP` | Out of scope, static asset, or disabled |
+| `OVRF` | `[YENTRA] OVRF` | Exceeded 200k tracked signature cap |
 
-Every response that lands in HTTP history is classified by a `ProxyResponseHandler`:
+**Cross-identity dedup:** When traffic arrives through role-tagged ports (attacker/victim), Cookie, Authorization, and role headers are stripped before computing the signature — so identical requests from different identities share one count (first = UNIQUE, second = DUPE x2).
 
-- A **signature** is computed from configurable parts of the request/response (method, host, path, param names, values, etc.).
-- Signatures are SHA-256-derived 128-bit keys stored in a `ConcurrentHashMap<Signature, AtomicInteger>` — fast, thread-safe, memory-light.
-- The verdict is stamped into the Notes column as `[YENTRA] UNIQUE` or `[YENTRA] DUPE x3`.
-- A **body digest** safety net: when body param names/values are included in the signature, the raw body's content hash (first 4096 bytes) is always folded in. This prevents two POSTs with different JSON bodies (e.g. `{"id":1}` → `{"id":2}`) from colliding into a false DUPE.
-- **Cross-identity dedup**: when traffic arrives through role-tagged ports (attacker/victim), Cookie, Authorization, and role headers are stripped before computing the signature, so the same request from two identities shares one count (first = UNIQUE, second = DUPE).
-
-**Verdicts:**
-| Verdict | Meaning |
-|---|---|
-| `[YENTRA] UNIQUE` | First time seeing this signature |
-| `[YENTRA] DUPE xN` | Seen N times before |
-| `[YENTRA] SKIP` | Out of scope, static asset, or yentra disabled |
-| `[YENTRA] OVRF` | Seen-set cap exceeded (default 200k signatures) |
-
----
-
-## Presets
-
-| Preset | What it considers unique |
-|---|---|
-| Default | method + host + path + sorted param names + status |
-| Request smuggling | method + host + path only (params ignored) |
-| IDOR / Auth | method + host + path (numeric IDs normalized) + sorted param names |
-| XSS | method + host + path + sorted query+body param names |
-| SQLi | method + host + path + sorted param names |
-| SSRF | method + host + path + query param names |
-| Open redirect | host + path + query param names (method-insensitive) |
-| SSTI | method + host + path + param names |
-| Path traversal | method + host + normalized path + query param names |
-| Strict | full URL + all params + values + status + content-type |
-| Custom | whatever you tick |
-
-![The Yentra config tab — pick a Preset (or tick individual signature fields), set filters and the memory cap, paste header overrides, and watch live stats](assets/dedupe-config.png)
+**Body digest safety net:** When body parameters are enabled, the raw body content hash (first 4 KB) is always folded into the signature, preventing false DUPEs when Montoya cannot parse the body into parameters.
 
 ---
 
 ## Yentra Config Tab
 
-The main configuration panel (Burp suite tab: **"Yentra"**) with two panes:
+The main configuration panel — `"Yentra"` suite tab.
 
-**Left pane — Behavior & Signature:**
-- **Stamp Notes column** — writes `[YENTRA]` verdicts into the Notes column.
-- **Highlight rows** — tints rows by verdict and listener port.
-- **Preserve existing notes** — keeps your manual notes when stamping (prepends the verdict).
-- **Preset dropdown** — choose from 10 presets or build your own with individual checkboxes.
-- **Signature fields** — 12 checkboxes: Method, Scheme, Host, Port, Path, Normalize numeric/UUID path segments, Query param names, Query param values, Body param names, Body param values, Response status code, Response Content-Type.
-- **Filters** — "In-scope only" (skip out-of-scope), "Skip static assets" (skip .css, .js, images, fonts, etc.), "Include headers" (comma-separated extra header names to fold into the signature).
-- **Max tracked signatures** — hard cap (default 200k); beyond this new signatures get `OVRF` to prevent OOM.
-- **Auto-stamp existing history** — retroactively stamp all proxy history when the extension loads.
-- **Stamp existing history** button — one-shot retroactive stamp of all history (background thread, cancellable).
-- **Apply (resets seen-set)** — applies config changes and clears the seen-set for clean verdicts.
-- **Reset stats** — zeros all counters.
-- **Live unique window** — opens a pop-up live feed of `[YENTRA] UNIQUE` entries.
+### Behavior & Signature Fields
 
-**Right pane — Stats & Overrides:**
-- **Live stats** — Total seen, Unique, Duplicates, Skipped, Tracked signatures (refreshes every second).
-- **Header overrides** — paste raw header lines (e.g. `Cookie: a=1; b=2`) to inject into requests sent to Organizer. Choose *Replace if present, add if missing* or *Replace only*. Reserved headers (Host, Content-Length, Transfer-Encoding) are rejected.
-- **Quick guide** — inline help text.
+| Control | Description |
+|---|---|
+| **Stamp Notes column** | Writes `[YENTRA]` verdicts into the Notes column of HTTP history |
+| **Highlight rows** | Tints rows by verdict and listener port |
+| **Preserve existing notes** | Keeps manual notes when stamping (prepends the verdict after a `\|`) |
+| **Preset dropdown** | Choose from 11 presets or build your own |
+| **Max tracked signatures** | Hard cap (default 200,000; range 1,000–5,000,000); beyond this, `OVRF` is returned |
+| **Auto-stamp existing history** | Retroactively stamps all proxy history on extension load |
+| **Stamp existing history** | One-shot retroactive stamp (background thread, cancellable) |
+| **Apply** | Commits config and resets the seen-set |
+| **Reset stats** | Zeros all counters without changing config |
+| **Live unique window** | Opens a pop-up live feed of `[YENTRA] UNIQUE` entries |
+
+**Signature fields:** Method · Scheme · Host · Port · Path · Normalize numeric/UUID/hex path segments · Query param names · Query param values · Body param names · Body param values · Response status code · Response Content-Type
+
+**Filters:** In-scope only · Skip static assets (`.css`, `.js`, `.png`, `.gif`, `.svg`, `.woff`, `.ttf`, `.eot`, `.otf`, `.ico`, `.webp`, `.map`, `.mp4`, `.mp3`) · Include custom headers (comma-separated)
+
+### Presets
+
+| Preset | Signature Components |
+|---|---|
+| **Default** | method + host + path + sorted query & body param names + status |
+| **Request smuggling** | method + host + path only |
+| **IDOR / Auth** | method + host + path (numeric/UUID normalized) + sorted param names |
+| **XSS** | method + host + path + sorted query & body param names |
+| **SQLi** | method + host + path + sorted param names |
+| **SSRF** | method + host + path + query param names |
+| **Open redirect** | host + path + query param names (method-insensitive) |
+| **SSTI** | method + host + path + sorted param names |
+| **Path traversal** | method + host + normalized path + query param names |
+| **Strict** | full method + scheme + host + port + path + all param names & values + status + Content-Type |
+| **Custom** | whatever you tick |
+
+### Stats & Header Overrides
+
+**Live stats** (refreshed every second): Total seen · Unique · Duplicates · Skipped · Tracked signatures (shown as `N / cap`)
+
+**Header overrides** — inject custom headers into requests sent to Organizer:
+
+- Paste raw header lines (`Name: value`), one per line; `#` comments and blank lines ignored
+- Choose **Replace if present, add if missing** or **Replace only**
+- Reserved headers (`Host`, `Content-Length`, `Transfer-Encoding`) are rejected
+- Applied via right-click → **Yentra → Send unique to Organizer**
+
+### History Stamping
+
+- **Stamp existing history** walks all proxy history entries and applies verdicts in-place (background thread, shows progress)
+- **Auto-stamp** does this automatically on every extension load — handy for saved projects
+- **Revert** strips `[YENTRA]` notes and/or clears highlights when those options are toggled off
+- Seen-set is reset before stamping for consistent counts
 
 ---
 
 ## Yentra Live Tab
 
-An always-on, auto-refreshing feed of **only** the `[YENTRA] UNIQUE` requests. No selection needed — it's there the moment the extension loads as a Burp suite tab (**"Yentra Live"**). You can also open it as a pop-up window via **Ctrl+9** in HTTP history / Site Map (with nothing selected) or via the **Live unique window** button on the Yentra tab.
-
-![YENTRA verdicts and attacker/victim port tags in Burp's HTTP history](assets/history-verdicts.png)
+An always-on, auto-refreshing feed of **only** the `[YENTRA] UNIQUE` requests. Opens as a Burp suite tab (`"Yentra Live"`) on load. Also accessible via **Ctrl+9** (in HTTP history / Site Map, with nothing selected) or the **Live unique window** button.
 
 **How it works:**
-- **Push path** — every `UNIQUE` classified by the proxy handler is pushed directly into the live feed.
-- **Poll path** — a background timer (every 1.5s) incrementally scans `api.proxy().history()` for entries stamped `[YENTRA] UNIQUE` that haven't been collected yet. Full rescan every ~60s to catch late "Stamp existing history" marks.
-- Both paths cross-dedup by request identity (method + URL + body hash + status) so the same request never appears twice.
 
-**Toolbar:**
-- **Send to Repeater** — sends selected rows to new Repeater tabs named by method + path.
-- **Share** — shares the selected request with connected peers (see [Live Share](#yentra-share-tab-live-share)).
-- **In-scope only** — filters the table to only requests in Target scope.
-- **Shared only** — shows only requests received from peers.
-- **Save request(s) for AI** — exports selected rows to a `.http` file with case manifests.
-- **Magic Cookie** — reissue with swapped auth headers (see [Magic Cookie](#magic-cookie)).
-- **Match & Replace** — swap IDs and reissue for IDOR/BOLA (see [Match & Replace](#match--replace)).
-- **Clear** — empties the table (already-seen IDs won't reappear).
-- **Live export → file** — mirrors the live feed to `~/.yentra/<project>/live-unique.http` and `selection.http`.
-- **Filter** — substring or regex search across all columns and full request/response body.
+- **Push path:** Every `UNIQUE` from the proxy handler is pushed directly into the live feed via an in-memory `UniqueFeed`
+- **Poll path:** Background timer (every 1.5s) incrementally scans proxy history for entries stamped `[YENTRA] UNIQUE` that haven't been collected yet; full rescan every ~60s catches late "Stamp history" marks
+- Both paths cross-dedupe by request identity so the same request never appears twice
 
-**Editor pane (below table):** Split request/response viewers with an **inline Repeater** — select a row to load it, edit the request on the left, **Send** (Ctrl+Space), see the response on the right with status/length/timing. Reissued requests land in Logger, not Proxy history.
+### Toolbar Actions
 
----
+| Button | Description |
+|---|---|
+| **Send to Repeater** | Sends selected rows to new Repeater tabs named by method + path |
+| **Share** | Shares the selected request with connected Live Share peers |
+| **Save for AI** | Exports selected rows to a `.http` file with case manifests for AI consumption |
+| **Magic Cookie** | Reissue selected requests with swapped auth headers — ideal for same-request / different-identity IDOR/BOLA |
+| **Match & Replace** | Swap IDs/tokens in path or body and reissue — watch for unexpected `200` responses |
+| **Clear** | Empties the table (already-seen IDs won't reappear in live mode) |
+| **Live export → file** | Mirrors the feed to `~/.yentra/<project>/` for AI bridge |
+| **Filter bar** | Bambda-style prefix tokens, plain text, and filter chips |
 
-## Yentra Share Tab (Live Share)
+### Inline Repeater
 
-Real-time request sharing with peers — host a server or connect to a friend to share captured requests live.
+A full Repeater-style interface embedded below the table:
 
-![Multi-account IDOR/BOLA in Yentra — attacker vs victim traffic](assets/idor-bola.png)
+- **Request (left)** — editable Montoya HTTP request editor
+- **Response (right)** — read-only response viewer with prominent status bar
+- **Send ▶** button fires via Burp's HTTP client; lands in **Logger**, not Proxy history
+- **Keyboard shortcuts:** `Cmd+Space` / `Ctrl+Space` (primary), `Ctrl+Enter` (fallback)
+- **Reset** restores the request to its original state from the table
 
-**Host a server:**
-- Enter a port (default 9999) and click **Start Server**.
-- **UPnP IGD** port mapping is attempted automatically for NAT traversal (optional toggle).
-- **SSH tunnel via serveo.net** — bypass firewalls by tunneling through a public SSH service (optional toggle).
+### Response Info Bar
 
-**Connect to a friend:**
-- Enter the host and port, click **Connect**.
-- Supports direct TCP and **relay** mode (Drop-style HTTP relay for when both peers are behind NAT/firewalls).
+Shown above the response editor with status-code-colored text:
 
-**Relay server:**
-- A standalone relay you can self-host. Build and run with Docker:
-  ```bash
-  cd relay-server && docker compose up -d
-  ```
-- The relay is a simple HTTP server that brokers room-based message exchange — two peers join the same room ID and requests flow through it.
+| Status Range | Color | Example |
+|---|---|---|
+| 2xx | Green | `HTTP 200 OK  \|  1.2 KB  \|  156 ms` |
+| 3xx | Indigo | `HTTP 302 Found  \|  0 bytes  \|  89 ms` |
+| 4xx | Amber | `HTTP 404 Not Found  \|  234 bytes  \|  45 ms` |
+| 5xx | Red | `HTTP 500 Internal Server Error  \|  567 bytes  \|  1203 ms` |
 
-**Share bar:**
-- **Share this request** — sends the currently selected request to all connected peers.
-- **Auto-share new uniques** — every new `UNIQUE` is automatically forwarded to peers.
-- **Re-issue received → Proxy history** — reissues requests received from peers through a specified proxy listener port so they appear in your history with the correct role tagging.
+### History Navigation
 
-**Received shared requests:** A list of all received requests — double-click to open in Repeater.
+- **◀ ▶** buttons navigate through sent request history (append-style)
+- Keyboard: **Alt+Left** / **Alt+Right**
+- History prunes forward entries when a new request is sent after navigating back (browser-style)
 
 ---
 
-## Right-Click Actions (HTTP history / Site map)
+## Bambda-Style Filter
 
-Select rows, right-click → **Yentra**:
+A Caido-inspired filter system with prefix tokens, chips, and a command palette.
 
-### Show only unique requests from selection — Ctrl+9
-Opens a separate window styled like Burp's HTTP history: columns for `# / Host / Method / URL / Status / Length / MIME / Notes`, rows tinted by their Burp highlight color, the Notes column showing the `[YENTRA] …` verdict + `[attacker]/[victim] port N` tag, and read-only request/response viewers beneath. Burp's API can't filter its own history table, so the deduplicated set is shown here instead. (Out-of-scope/static `SKIP` rows and known duplicates are excluded.)
+### Prefix Tokens
 
-This is a **snapshot** of the current selection. For an auto-updating view, use the **Yentra Live** tab.
+Type `prefix:value` tokens (case-insensitive) into the search bar. Multiple tokens combine with AND logic. Plain text becomes substring search across all columns + request body + response body.
 
-### Send unique to Organizer
-Ships only the unique requests (dupes filtered) to Burp Organizer, optionally applying header overrides, tagged with a batch label in the Notes column (`Yentra @ 2026-07-05 16:44:00`). If the selection has no `[YENTRA]` stamps yet, a full history stamp pass runs first so you can see verdicts on the rows you just acted on.
+| Prefix | Matches | Example |
+|---|---|---|
+| `m:` | HTTP method | `m:GET`, `m:POST` |
+| `s:` | Response status code | `s:200`, `s:404` |
+| `h:` | Host substring | `h:api.example` |
+| `url:` | URL path substring | `url:/api/v1/` |
+| `body:` | Response body content | `body:token` |
+| `req:` | Request body content | `req:user_id` |
+| `hdr:` | Request header name + value | `hdr:Authorization` |
+| `mime:` | Response MIME type | `mime:JSON` |
+| `len:` | Response body length | `len:1024` |
+| `notes:` | Notes column | `notes:UNIQUE` |
+| `u:` | Only UNIQUE rows | `u:` |
+| `d:` | Only DUPE rows | `d:` |
+| `skip:` | Only SKIP rows | `skip:` |
+| `r:` / `regex:` | Regex across all columns + body | `r:\d{3}` |
 
-From Organizer, right-click → **Extensions → …** to feed them to any extension (HTTP Request Smuggler, Turbo Intruder, etc.).
+### Filter Chips
 
-### Live unique window
-Opens the auto-collecting live view — same as the **Yentra Live** tab but as a pop-up window.
+Toggle buttons in the filter bar:
 
-### Remove host from scope
-Excludes the selected request's host from Burp's Target scope. A confirmation dialog shows the URL(s) to exclude. For example, selecting `https://api.example.com/v1/users/123` → excludes `https://api.example.com/`. When multiple rows are selected across different hosts, each unique host is excluded.
+| Chip | Color (Active) | Function |
+|---|---|---|
+| `.* regex` | Purple | Treat search as case-insensitive regex |
+| `In-scope` | Green | Show only requests in Target scope |
+| `Shared` | Amber | Show only requests from Live Share peers |
 
-### Remove path from scope
-Excludes the selected request's full path prefix from Burp's Target scope. For example, selecting `https://api.example.com/v1/users/123?page=1` → excludes `https://api.example.com/v1/users/123` (query string stripped). When multiple rows are selected, unique path prefixes are deduplicated. This is like Burp's built-in "Remove from scope" but you can select any request from history and exclude its host or path with a single click — no need to manually type URL patterns in the Target scope settings.
+### Command Palette
 
----
+Click the search bar (or press Down arrow when focused) to open the filter command palette. Four categorized groups with 18 options, each showing a prefix badge, label, and description. Navigate with arrow keys, select with Enter or click.
 
-## Right-Click Popup (Yentra Live / Unique Requests table)
+**Groups:** HTTP · Request · Yentra · Advanced
 
-Right-click any row in the **Yentra Live** tab or **Unique Requests** window:
+### Status Operators
 
-- **Send to Repeater** — sends selected rows to new Repeater tabs.
-- **Share** — shares the selected request with connected Live Share peers.
-- **Remove host from scope** — excludes the selected request's host from Target scope (with confirmation dialog).
-- **Remove path from scope** — excludes the selected request's path prefix from Target scope (with confirmation dialog).
+Type standalone comparison operators for status-based filtering:
 
-All scope removal actions show a confirmation dialog listing the URLs to be excluded and log the result to the extension output.
-
----
-
-## Remove from Scope
-
-Available in two places:
-1. **HTTP history / Site Map** — right-click → **Yentra → Remove host from scope** or **Remove path from scope**
-2. **Yentra Live / Unique Requests table** — right-click popup with the same options
-
-**What gets excluded:**
-- **Remove host from scope** → constructs `scheme://host:port/` (strip default ports 80/443), which prefix-matches all paths on that host in Burp's scope engine.
-- **Remove path from scope** → constructs `scheme://host:port/path` (query stripped, trailing slashes removed), which prefix-matches that path and everything under it.
-
-Both work on multi-selections — unique hosts/paths across selected rows are deduplicated before exclusion. A confirmation dialog shows exactly what will be excluded before acting.
+| Operator | Example | Matches |
+|---|---|---|
+| `>N` | `>399` | Status > 399 |
+| `>=N` | `>=400` | Status ≥ 400 |
+| `<N` | `<300` | Status < 300 |
+| `<=N` | `<=200` | Status ≤ 200 |
 
 ---
 
@@ -231,112 +235,100 @@ Both work on multi-selections — unique hosts/paths across selected rows are de
 
 ### Magic Cookie
 
-Reissues selected request(s) with a user-supplied auth set swapped in. Strips the request's existing `Cookie` and `Authorization` (plus any header you list) and sends with **only** the credentials you provide — method, path, body and every other header unchanged.
+Reissues selected requests with a user-supplied auth set swapped in.
 
-**Usage:**
-1. Select one or more requests in the Yentra Live table (or unique-requests window).
-2. Click **Magic Cookie** in the toolbar.
-3. Paste auth headers — one `Name: value` per line. Lines starting with `#` are comments.
-4. The auth set is remembered across windows and restarts (Montoya preferences).
-5. Click **Send**. Results open in their own streaming window — each response lands as it returns so you can compare status codes live.
+1. Select requests in Yentra Live
+2. Click **Magic Cookie**
+3. Paste auth headers — one `Name: value` per line (`#` comments ignored)
+4. The auth set is remembered across sessions
+5. Results stream into a new window — each response lands as it arrives
 
-Ideal for same-request / different-identity IDOR/BOLA checks (e.g. replay an attacker's request with the victim's session and watch for a `200`). The results window has all the same toolbar actions (Send to Repeater, Save for AI, Magic Cookie, Match & Replace, filter, inline repeater).
-
-The Magic Cookie dialog is **non-modal** — it stays open after sending so you can change auth headers, select new rows, and send again without reopening.
+Strips the request's existing Cookie and Authorization (plus any header you list), then adds only your supplied credentials. Method, path, body, and other headers are unchanged. The dialog stays open after sending so you can swap values and send again.
 
 ### Match & Replace
 
-Reissues selected request(s) with a find/replace applied to the **path/query**, the **body**, or **both** (literal, or tick **regex**). Built for IDOR/BOLA: swap an object id (e.g. `1001` → `1002`) and watch the results for a `200` where another identity's value should be denied.
+Swaps an ID or token in the path/query, body, or both — then reissues.
 
-**Usage:**
-1. Select one or more requests in the Yentra Live table.
-2. Click **Match & Replace** in the toolbar.
-3. Enter the value to **match** and what to **replace** it with.
-4. Choose **Path/query**, **Body**, or both. Tick **regex** for regex-based replacements.
-5. Click **Replace & send**.
+1. Select requests → **Match & Replace**
+2. Enter **Match** text and **Replace** text
+3. Choose **Path/query**, **Body**, or both
+4. Optionally tick **regex**
+5. Click **Replace & send**
 
-**Key behaviors:**
-- **Only requests that actually contain the match are reissued** — the rest are skipped, so you hit only the endpoints carrying that ID.
-- Method, headers, and untouched parts go out as-is (`Content-Length` is refreshed automatically).
-- The match/replace/scope/regex settings are remembered across windows and restarts (Montoya preferences).
-- Results open in their own streaming window — each response lands as it returns.
-
-The Match & Replace dialog is **non-modal** — it stays open after sending so you can:
-- Change match/replace values for a different ID and send again.
-- Select different rows from the table while the dialog is open.
-- Send multiple batches without reopening the dialog. Close with Cancel or the window X.
+Only requests containing the match are sent (others skipped). The dialog stays open — change values, select new rows, send again. Settings are remembered across sessions.
 
 ---
 
-## Inline Repeater
+## Right-Click Actions
 
-A full Repeater-style interface built into the bottom half of every Yentra Live / Unique Requests window — no need to switch to Burp's Repeater tab.
+Available in HTTP history, Site Map table, and Site Map tree via the **Yentra** submenu:
 
-- **Request (left)** — editable Montoya HTTP request editor.
-- **Response (right)** — read-only response viewer with a prominent **status bar** showing the HTTP status code, response size (bytes/KB/MB), and timing in ms — same format as Burp Repeater.
-- **Send ▶** — sends the edited request via Burp's HTTP client. Shortcuts: **Cmd+Space** / **Ctrl+Space** (primary) and **Ctrl+Enter** (fallback).
-- **◀ ▶ Back/Forward** — full request/response history navigation. Every sent request is recorded; click ◀ to go back to a previous request+response pair, ▶ to go forward. Keyboard: **Alt+Left** / **Alt+Right**. History is pruned when you send after navigating back (append-style, like a browser).
-- **Cancel** — stops waiting for a response.
-- **Target display** — shows the host:port you're sending to.
+| Action | Description |
+|---|---|
+| **Live unique window** | Opens the auto-collecting live view (same as Ctrl+9 with no selection) |
+| **Show only unique requests from selection — Ctrl+9** | Deduplicates selection by signature, opens in results window |
+| **Send unique to Organizer** | Deduplicates selection, applies header overrides, sends uniques to Burp Organizer with batch label |
+| **Remove host from scope** | Excludes selected request's host(s) from Target scope |
+| **Remove path from scope** | Excludes selected request's path prefix(es) from Target scope |
 
-Reissued requests land in **Logger**, not Proxy history. Uses Burp's HTTP client.
+Also available as a right-click popup on the Yentra Live table: **Send to Repeater**, **Share**, **Remove host from scope**, **Remove path from scope**.
 
 ---
 
-## Live Export (AI Bridge)
+## Remove from Scope
 
-Burp's MCP server can't see a custom extension window, so to hand your deduped requests to an AI we use the **filesystem** as the shared channel. With the **Live export → file** toggle on (default in the live window):
+**What gets excluded:**
+
+- **Remove host from scope** → `scheme://host:port/` (default ports 80/443 stripped) — prefix-matches all paths on that host
+- **Remove path from scope** → `scheme://host:port/path` (query stripped, trailing slashes trimmed) — prefix-matches that path and sub-paths
+
+A confirmation dialog shows exactly what will be excluded. Multi-selection deduplicates unique hosts/paths.
+
+---
+
+## Yentra Share (Live Share)
+
+Real-time request sharing with peers — host a server or connect to a friend.
+
+**Hosting:**
+- Start a TCP server on any port (default 9999)
+- Automatic UPnP port mapping for NAT traversal
+- Optional SSH tunnel via serveo.net for firewall bypass
+
+**Connecting:**
+- Direct TCP connection to host:port
+- HTTP relay mode for when both peers are behind NAT (self-host the relay with Docker: `cd relay-server && docker compose up -d`)
+- Room-based isolation via random 8-char room IDs
+
+**Sharing:**
+- **Share button** sends the current request to all connected peers
+- **Auto-share new uniques** forwards every fresh `UNIQUE` to peers in real time
+- **Re-issue received → Proxy history** replays received requests through a local proxy listener for role tagging
+- Received requests appear in Yentra Live with magenta highlights
+
+**Relay server:** Self-hosted with Docker. A simple HTTP relay that brokers room-based message exchange — two peers join the same room and requests flow through it.
+
+---
+
+## AI Bridge (Live Export)
+
+Burp's MCP server cannot see custom extension windows, so Yentra uses the **filesystem** as the AI bridge:
 
 ```
 ~/.yentra/<burp-project-name>/
-  live-unique.http   ← every unique request it collects, as it arrives
-  selection.http     ← just the rows you currently have selected
+  live-unique.http   ← every unique request, as it arrives
+  selection.http     ← current table selection
 ```
 
-The folder is named after the **current Burp project** (`api.project().name()`), so each engagement gets its own. Each entry is the request **and** its response in a `####`-delimited block, prefixed with a [case manifest](#case-manifest-per-request); the file opens with a one-line protocol telling the AI to read the manifest and explain the risk before touching payloads.
+The folder is named after the current Burp project. Each entry is a `####`-delimited request+response block prefixed with a **case manifest** — five fields the AI reads before touching payloads:
 
-**Workflow:** open the **Yentra Live** tab → it fills with `[YENTRA] UNIQUE` requests and mirrors them automatically → in **Claude Code**: *"read `~/.yentra/<project>/live-unique.http`"* for the full filtered set, or `selection.http` for just what you've highlighted. The folder path is logged to the extension's **Output** on open and shown in the **status bar** after each write.
+1. **Source request** — method + URL
+2. **Identity role** — `attacker` / `victim` (from `X-AI-Use` header or `[attacker]/[victim]` tag)
+3. **Why it's unique** — the Yentra verdict and signature rationale
+4. **Replay command** — a ready-to-run `curl` (auth + body included; body omitted if > 4 KB)
+5. **Expected safe failure** — the IDOR/BOLA oracle: replayed under a different identity this should be denied (401/403/404); a 200 with another identity's data is the finding
 
-![The AI bridge on disk — ~/.yentra/<project>/ holds live-unique.http and selection.http](assets/ai-export.png)
-
----
-
-## Case Manifest (per request)
-
-So the AI gets a **case file, not a bucket of HTTP noise**, every exported request is prefixed with a `#`-commented manifest — un-skippable, it rides in front of every block:
-
-1. **Source request** — method + URL.
-2. **Identity role** — `attacker` / `victim`, from the `X-AI-Use` header or the `[attacker]/[victim] port N` tag.
-3. **Why it's unique** — the Yentra verdict and what the signature keyed on.
-4. **Replay command** — a ready-to-run `curl` (auth + body included).
-5. **Expected safe failure** — the IDOR/BOLA oracle: replayed under a *different* identity it should be denied (`401/403/404`); a `200` returning the other identity's data is the finding.
-
-```
-# --- CASE MANIFEST (read before touching payloads) ------------------------
-# 1. Source request : POST https://api.example.com/v1/tracking/batch/events
-# 2. Identity role  : victim  (X-AI-Use: victim, proxy listener port 8083)
-# 3. Why unique     : [YENTRA] UNIQUE — first request with this signature.
-# 4. Replay command : curl -isSk -X POST 'https://api.example.com/v1/tracking' -H 'Cookie: ...' --data-raw '...'
-# 5. Expected safe  : original response 200; replayed under a DIFFERENT identity this should be DENIED —
-#                     expect 401/403/404. A 200 returning the other identity's data is the finding.
-# --------------------------------------------------------------------------
-===== REQUEST =====
-POST /v1/tracking/batch/events HTTP/2
-...
-```
-
-*Manifest format suggested by [Timur Yessenov (@Timur_Yessenov)](https://x.com/Timur_Yessenov) — thanks!*
-
----
-
-## Body Only (Pretty JSON) Editor
-
-A read-only response-viewer tab (**"Body Only"**) available in Proxy, Repeater, and everywhere else a response is shown. It:
-
-- Strips HTTP headers — shows only the body.
-- Strips JSON XSSI guards (`)]}'`, `for(;;);`, `while(1);`).
-- Pretty-prints JSON with a zero-dependency re-indenter.
-- Also available as an opt-in when you **Save request(s) for AI** — tick **Responses: body only, pretty JSON** in the save dialog.
+**Workflow:** Open Yentra Live → it fills with `[YENTRA] UNIQUE` requests and mirrors them → in Claude Code: *"read `~/.yentra/<project>/live-unique.http`"*. The toggle is on by default in live mode. Tick **Responses: body only, pretty JSON** when saving for AI to get clean JSON without headers.
 
 ---
 
@@ -344,47 +336,40 @@ A read-only response-viewer tab (**"Body Only"**) available in Proxy, Repeater, 
 
 For multi-account IDOR/BOLA testing where each account browses through its own proxy listener port.
 
-- Registers a `ProxyRequestHandler` that injects identifying headers (`X-AI-Use`, `X-Role`) into traffic by the **listener port** it arrived on.
-- Row colors are per **port** and per **verdict** (unique vs duplicate). Default port rules (edit `PORT_RULES` in `PortHighlightHandler.java` and rebuild):
+**Default port rules** (edit `PORT_RULES` in `PortHighlightHandler.java` and rebuild):
 
-| Listener port | Unique color | Duplicate color | Injected header |
-|---|---|---|---|
-| **8082** (attacker) | green | yellow | `X-AI-Use: attacker` |
-| **8083** (victim) | red | gray | `X-AI-Use: victim` |
-| any other port | yellow | gray | — |
+| Listener Port | Role | Unique Color | Duplicate Color | Injected Headers |
+|---|---|---|---|---|
+| **8082** | attacker | Green | Yellow | `X-AI-Use: attacker` |
+| **8083** | victim | Red | Gray | `X-AI-Use: victim` |
+| any other | — | Yellow | Gray | — |
 
-Because color is verdict-aware, it's applied after classification — so the "Highlight rows" toggle must be on for colors to show.
-
-Port rule config is logged to the extension output on load:
-```
-[yentra] port 8082 -> unique=GREEN dupe=YELLOW {X-AI-Use=attacker}
-[yentra] port 8083 -> unique=RED dupe=GRAY {X-AI-Use=victim}
-```
+Row colors are per-port and per-verdict, applied after classification. The **Highlight rows** toggle must be on. Port rules are logged to extension output on load.
 
 ---
 
-## Header Overrides
+## Body Only (Pretty JSON) Editor
 
-In the Yentra tab's **Header overrides** section:
+A read-only response-viewer tab available everywhere a response is shown:
 
-- Paste raw header lines (e.g. `Cookie: a=1; b=2`, `Authorization: Bearer …`), one per line. Blank lines and `#` comments are ignored.
-- Pick **Replace if present, add if missing** or **Replace only (don't add new headers)**.
-- Tick **Apply header overrides when sending to Organizer** and hit **Apply**.
-- Reserved headers (`Host`, `Content-Length`, `Transfer-Encoding`) are rejected with a warning logged.
-- Overrides are applied when you right-click → **Yentra → Send unique to Organizer** — each request is modified in-flight before hitting Organizer.
+- Shows only the body (no headers)
+- Strips JSON XSSI guards (`)]}'`, `for(;;);`, `while(1);`)
+- Pretty-prints JSON with zero-dependency re-indenter
+- Opt-in when you **Save for AI**: tick **Responses: body only, pretty JSON**
 
 ---
 
-## Notes / Edge Cases
+## Keyboard Shortcuts
 
-- **Existing history can be retro-stamped.** Use the **"Stamp existing history"** button in the Yentra tab to walk `api.proxy().history()` and apply verdicts in-place. Or tick **"Auto-stamp existing history when extension loads"** to do it automatically on every load (handy when reopening saved projects). The job runs on a background thread and can be cancelled. The seen-set is reset before the pass so counts stay consistent.
-- **Changing the config resets the seen-set** so you don't get mixed verdicts under different signature rules.
-- **Static assets** (`.css`, `.js`, images, fonts, etc.) are skipped by default to keep the seen-set small.
-- **Memory cap**: at *Max tracked signatures* (default 200k) new keys stop being added and the verdict becomes `OVRF` — prevents OOM on huge engagements.
-- **Out-of-scope**: enable "In-scope only" to skip everything not in target scope.
-- **Path normalization** (numeric IDs → `{n}`, UUIDs → `{uuid}`, long hex → `{hex}`) is opt-in per preset; turn it on for IDOR / path traversal.
-- **Body digest safety net**: when body params are included, a hash of the raw body content is always folded into the signature — ensuring different JSON/XML bodies never produce false DUPEs even if Montoya can't parse them into parameters.
-- **Non-modal dialogs**: both Magic Cookie and Match & Replace dialogs are non-modal — they stay open after sending so you can change values, select new rows, and send again without reopening.
+| Shortcut | Context | Action |
+|---|---|---|
+| `Cmd+Space` / `Ctrl+Space` | Inline Repeater | Send request |
+| `Ctrl+Enter` | Inline Repeater | Send request (fallback) |
+| `Alt+Left` | Inline Repeater | Navigate history back |
+| `Alt+Right` | Inline Repeater | Navigate history forward |
+| `Ctrl+9` | HTTP history / Site Map | Open live unique window (snapshot if rows selected) |
+| `Down` | Filter field (focused) | Open command palette |
+| `Up/Down/Enter/Esc` | Command palette | Navigate / select / dismiss |
 
 ---
 
@@ -402,6 +387,6 @@ Output: `build/libs/yentra-0.1.0-SNAPSHOT.jar`
 
 ## Acknowledgements
 
-- Yentra builds on **[yentra](https://github.com/sw33tLie/yentra)** by **sw33tLie** — the original dedup + unique-requests core. It's MIT-licensed and that licence is retained in [`LICENSE`](LICENSE).
-- The per-request **[case manifest](#case-manifest-per-request)** in the AI export was suggested by **[Timur Yessenov (@Timur_Yessenov)](https://x.com/Timur_Yessenov)**.
+- Yentra builds on **[burp-dedupe](https://github.com/sw33tLie/burp-dedupe)** by **sw33tLie** — the original deduplication engine. MIT-licensed.
+- The per-request **case manifest** in the AI export was suggested by **[Timur Yessenov (@Timur_Yessenov)](https://x.com/Timur_Yessenov)**.
 - The **Body Only (Pretty JSON)** response tab was inspired by **[rikeshbaniya](https://github.com/rikeshbaniya)**'s Burp extension.
