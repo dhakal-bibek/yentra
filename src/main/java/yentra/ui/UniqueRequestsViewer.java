@@ -2474,7 +2474,10 @@ public final class UniqueRequestsViewer {
             String qs = toQueryString(flat);
             String path = base.path();
             int qi = path.indexOf('?');
-            out = base.withPath((qi >= 0 ? path.substring(0, qi) : path) + (qs.isEmpty() ? "" : "?" + qs))
+            String existingQs = qi >= 0 ? path.substring(qi + 1) : "";
+            String basePath = qi >= 0 ? path.substring(0, qi) : path;
+            String finalQs = existingQs.isEmpty() ? qs : existingQs + "&" + qs;
+            out = base.withPath(basePath + (finalQs.isEmpty() ? "" : "?" + finalQs))
                 .withMethod("GET").withBody("");
             if (out.hasHeader("Content-Type")) out = out.withRemovedHeader("Content-Type");
             if (out.hasHeader("Content-Length")) out = out.withRemovedHeader("Content-Length");
@@ -2567,11 +2570,12 @@ public final class UniqueRequestsViewer {
             } else if (formPairs != null) {
                 qs = toQueryString(formPairs);
             }
+            String path = out.path();
+            int qi = path.indexOf('?');
+            String existingQs = qi >= 0 ? path.substring(qi + 1) : "";
+            String base = qi >= 0 ? path.substring(0, qi) : path;
             if (qs != null && !qs.isEmpty()) {
-                String path = out.path();
-                int qi = path.indexOf('?');
-                String base = qi >= 0 ? path.substring(0, qi) : path;
-                out = out.withPath(base + "?" + qs);
+                out = out.withPath(base + "?" + (existingQs.isEmpty() ? qs : existingQs + "&" + qs));
             }
             out = out.withMethod("GET").withBody("");
             if (out.hasHeader("Content-Type")) out = out.withRemovedHeader("Content-Type");
