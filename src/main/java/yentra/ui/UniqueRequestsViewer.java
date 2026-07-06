@@ -418,10 +418,10 @@ public final class UniqueRequestsViewer {
                 + "then reissue the selected request(s) — watch the live results for an unexpected 200.");
         matchReplace.addActionListener(e -> openMatchReplaceDialog());
 
-        JButton convertBtn = new PremiumButton("Convert Request To", "default");
+        JButton convertBtn = new PremiumButton("JSON Convert Request To", "default");
         convertBtn.setToolTipText("<html>Convert selected JSON-body request to another HTTP method.<br>"
                 + "POST/PUT/PATCH → change method only. GET → flatten JSON to query params.<br>"
-                + "DELETE → keep body or flatten to query params.</html>");
+                + "DELETE → keep body. Auto-sends and shows responses live.</html>");
         convertBtn.addActionListener(e -> {
             JPopupMenu methodMenu = new JPopupMenu();
             for (String m : new String[]{"GET", "POST", "PUT", "PATCH", "DELETE"}) {
@@ -436,11 +436,10 @@ public final class UniqueRequestsViewer {
             methodMenu.show(convertBtn, 0, convertBtn.getHeight());
         });
 
-        JButton respToReqBtn = new PremiumButton("Response to Request", "default");
+        JButton respToReqBtn = new PremiumButton("JSON Convert Response To", "default");
         respToReqBtn.setToolTipText("<html>Take the JSON response body and generate a new request from it.<br>"
                 + "Reuses the original request's path, host, cookies, and auth headers.<br>"
-                + "GET → response JSON flattened to query params.<br>"
-                + "POST/PUT/PATCH/DELETE → response JSON as request body.</html>");
+                + "GET → response JSON flattened to query params. Auto-sends live.</html>");
         respToReqBtn.addActionListener(e -> {
             JPopupMenu methodMenu = new JPopupMenu();
             for (String m : new String[]{"GET", "POST", "PUT", "PATCH", "DELETE"}) {
