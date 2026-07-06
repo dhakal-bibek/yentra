@@ -58,7 +58,8 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
-import java.awt.KeyboardFocusManager;
+import java.awt.Toolkit;
+import java.awt.AWTEvent;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
@@ -923,11 +924,10 @@ public final class UniqueRequestsViewer {
     }
 
     /**
-     * Binds <b>Send</b> to Ctrl+Space and Ctrl+Enter. Ctrl+Space uses a
-     * {@link KeyboardFocusManager} dispatcher plus {@code enableInputMethods(false)} on all nested
-     * text components — this prevents macOS from consuming the keystroke for input-source switching,
-     * the same way Burp Repeater makes it work.
-     * Ctrl+Enter uses the standard {@code WHEN_IN_FOCUSED_WINDOW} input map as a fallback.
+     * Binds <b>Send</b> to Ctrl+Space and Ctrl+Enter. Ctrl+Space is handled via
+     * {@link Toolkit#addAWTEventListener} — operates at the native event level, before
+     * macOS Input Method or Swing key bindings see the keystroke. This is the same
+     * mechanism Burp Repeater uses to make Ctrl+Space work on macOS.
      */
     private void installSendKeys(JComponent c) {
         c.getActionMap().put("dedupe-send", new AbstractAction() {
@@ -937,19 +937,17 @@ public final class UniqueRequestsViewer {
         });
         InputMap im = c.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
         im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
-
-        // When_IN_FOCUSED_WINDOW also catches Ctrl+Space if the OS doesn't intercept it.
         im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
 
-        // Fire before macOS Input Method framework consumes Ctrl+Space.
-        KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(e -> {
-            if (e.getID() != KeyEvent.KEY_PRESSED) return false;
-            if (e.getKeyCode() != KeyEvent.VK_SPACE) return false;
-            if ((e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) == 0) return false;
-            if (!root.isShowing()) return false;
+        Toolkit.getDefaultToolkit().addAWTEventListener(e -> {
+            if (e.getID() != KeyEvent.KEY_PRESSED) return;
+            KeyEvent ke = (KeyEvent) e;
+            if (ke.getKeyCode() != KeyEvent.VK_SPACE) return;
+            if ((ke.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) == 0) return;
+            if (!root.isShowing()) return;
+            ke.consume();
             SwingUtilities.invokeLater(this::sendEditedRequest);
-            return true;
-        });
+        }, AWTEvent.KEY_EVENT_MASK);
     }
 
     private static void disableInputMethods(Component c) {
