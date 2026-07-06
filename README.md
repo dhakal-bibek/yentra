@@ -1,6 +1,6 @@
 # Yentra
 
-A premium Burp Suite extension that transforms noisy HTTP history into a deduplicated, AI-ready attack surface. Stamps every proxy entry **UNIQUE** or **DUPE**, streams uniques into a live feed, color-codes attacker/victim traffic by listener port, and bridges straight to AI — with IDOR/BOLA tooling, live peer sharing, and a Caido-style filter palette built in.
+Burp Suite extension + port-based highlighter: dedupes proxy history into a live unique-request feed and color-codes attacker/victim traffic by listener port (PwnFox-style) — built for Android/iOS multi-account IDOR/BOLA testing, with Magic Cookie, Match & Replace, live peer sharing, Caido-style filter palette, inline Repeater, AI bridge, and .http export for Claude Code.
 
 ---
 
