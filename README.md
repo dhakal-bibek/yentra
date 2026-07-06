@@ -15,6 +15,10 @@ Burp Suite extension + port-based highlighter: dedupes proxy history into a live
 | **HTTP Relay** | Self-host the relay with Docker (`relay-server/`); peers join by room ID | Both peers behind NAT/firewall |
 | **UPnP** | Automatic router port mapping | Home/office networks with UPnP-enabled routers |
 
+![Live Share — server on port 9999 with client connected, sharing requests in real time](assets/live-share-connected.png)
+
+![Received shared requests — double-click any entry to open in Repeater](assets/live-share-received.png)
+
 **What makes it unique:**
 - Requests arrive **already deduplicated** — only `[YENTRA] UNIQUE` entries are shared
 - **Auto-share mode:** every new unique is forwarded to all connected peers in real time
@@ -357,8 +361,6 @@ A confirmation dialog shows exactly what will be excluded. Multi-selection dedup
 | **Double-click → Repeater** | Any received request opens in a Burp Repeater tab with one double-click |
 | **500-entry log** | Scrollable list of all received requests with method + URL preview |
 
-![Live Share — server running on port 9999 with a client connected, sharing requests in real time](assets/live-share-connected.png)
-
 ### Self-Hosting the Relay
 
 ```bash
@@ -374,8 +376,6 @@ The relay is a lightweight Java HTTP server. Two peers connect to it with the sa
 - **Training / mentoring:** Senior tester shares live traffic with a junior in real time
 - **Distributed testing:** Two testers on different networks testing the same target simultaneously
 - **Demo / presentation:** Share your Burp session live without screen sharing
-
-![Received shared requests — double-click any entry to open in Repeater](assets/live-share-received.png)
 
 ---
 
