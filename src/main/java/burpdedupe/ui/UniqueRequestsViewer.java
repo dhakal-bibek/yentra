@@ -48,9 +48,11 @@ import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableColumn;
 import javax.swing.table.TableRowSorter;
+import javax.swing.text.JTextComponent;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Container;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridBagConstraints;
@@ -183,6 +185,7 @@ public final class UniqueRequestsViewer {
         this.baseTitle = title;
         this.requestEditor = api.userInterface().createHttpRequestEditor(); // editable — inline repeater
         this.responseEditor = api.userInterface().createHttpResponseEditor(EditorOptions.READ_ONLY);
+        disableInputMethods(requestEditor.uiComponent());
 
         this.model = new UniqueTableModel();
         seedRows(uniques);  // precompute cells off the render path (EDT here, but seeds are small/empty)
@@ -920,10 +923,11 @@ public final class UniqueRequestsViewer {
     }
 
     /**
-     * Binds <b>Send</b> to Ctrl+Space and Ctrl+Enter. Ctrl+Space goes through a
-     * {@link KeyboardFocusManager} dispatcher (fires before macOS's Input Method framework
-     * consumes it for input-source switching — same approach Burp Repeater uses).
-     * Ctrl+Enter uses the standard {@code WHEN_IN_FOCUSED_WINDOW} input map.
+     * Binds <b>Send</b> to Ctrl+Space and Ctrl+Enter. Ctrl+Space uses a
+     * {@link KeyboardFocusManager} dispatcher plus {@code enableInputMethods(false)} on all nested
+     * text components — this prevents macOS from consuming the keystroke for input-source switching,
+     * the same way Burp Repeater makes it work.
+     * Ctrl+Enter uses the standard {@code WHEN_IN_FOCUSED_WINDOW} input map as a fallback.
      */
     private void installSendKeys(JComponent c) {
         c.getActionMap().put("dedupe-send", new AbstractAction() {
@@ -934,6 +938,10 @@ public final class UniqueRequestsViewer {
         InputMap im = c.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
         im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
 
+        // When_IN_FOCUSED_WINDOW also catches Ctrl+Space if the OS doesn't intercept it.
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, KeyEvent.CTRL_DOWN_MASK), "dedupe-send");
+
+        // Fire before macOS Input Method framework consumes Ctrl+Space.
         KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(e -> {
             if (e.getID() != KeyEvent.KEY_PRESSED) return false;
             if (e.getKeyCode() != KeyEvent.VK_SPACE) return false;
@@ -942,6 +950,17 @@ public final class UniqueRequestsViewer {
             SwingUtilities.invokeLater(this::sendEditedRequest);
             return true;
         });
+    }
+
+    private static void disableInputMethods(Component c) {
+        if (c instanceof JTextComponent) {
+            ((JTextComponent) c).enableInputMethods(false);
+        }
+        if (c instanceof Container) {
+            for (Component child : ((Container) c).getComponents()) {
+                disableInputMethods(child);
+            }
+        }
     }
 
     /** All currently selected rows (in view order), skipping nulls. Empty if nothing is selected. */
