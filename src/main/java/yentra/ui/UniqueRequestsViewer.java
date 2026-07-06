@@ -2407,13 +2407,16 @@ public final class UniqueRequestsViewer {
             String stripped = respBody.strip();
             if (!stripped.startsWith("{") && !stripped.startsWith("[")) continue;
 
-            Object json;
+            Object json = null;
             try {
                 json = parseJson(stripped);
             } catch (RuntimeException e) {
                 try { json = parseJson(sanitizeJson(stripped)); }
-                catch (RuntimeException e2) { continue; }
+                catch (RuntimeException e2) {
+                    json = extractJsonSegment(stripped);
+                }
             }
+            if (json == null) continue;
 
             HttpRequest base = rr.request();
             HttpRequest out;
@@ -2510,9 +2513,11 @@ public final class UniqueRequestsViewer {
                 try {
                     json = parseJson(sanitizeJson(stripped));
                 } catch (RuntimeException e2) {
-                    api.logging().logToOutput("[yentra] JSON parse failed, converting method-only: " + e2.getMessage());
-                    json = null;
+                    json = extractJsonSegment(stripped);
                 }
+            }
+            if (json == null) {
+                api.logging().logToOutput("[yentra] JSON parse failed, converting method-only");
             }
         }
 
@@ -2541,6 +2546,22 @@ public final class UniqueRequestsViewer {
         s = s.replaceAll(",\\s*]", "]");
         s = s.replaceAll(",\\s*}", "}");
         return s;
+    }
+
+    private static Object extractJsonSegment(String body) {
+        if (body.contains("&&&")) {
+            String[] parts = body.split("&&&");
+            for (int i = parts.length - 1; i >= 0; i--) {
+                String part = parts[i].strip();
+                if (part.isEmpty()) continue;
+                try { return parseJson(part); }
+                catch (RuntimeException e) {
+                    try { return parseJson(sanitizeJson(part)); }
+                    catch (RuntimeException ignored) {}
+                }
+            }
+        }
+        return null;
     }
 
     private static HttpRequest swapMethod(HttpRequest req, String targetMethod) {
