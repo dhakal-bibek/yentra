@@ -189,6 +189,7 @@ public final class UniqueRequestsViewer {
     /** Live export: mirror every collected unique request to a file Claude Code can read. */
     private final JCheckBox cbLiveExport = new JCheckBox("Live export → file", false);
     private Timer exportDebounce;
+    private Timer filterDebounce;
     private static final Object EXPORT_LOCK = new Object();
 
     private final java.util.List<RepeaterEntry> repeaterHistory = new ArrayList<>();
@@ -803,7 +804,10 @@ public final class UniqueRequestsViewer {
     private record PaletteGroup(String label, java.util.List<PaletteItem> items) {}
     private record PaletteItem(String prefix, String label, String desc, String placeholder) {}
 
-    private java.util.List<PaletteGroup> buildItems() {
+    private java.util.List<PaletteGroup> buildItems() { return CACHED_ITEMS; }
+    private static final java.util.List<PaletteGroup> CACHED_ITEMS = createCachedItems();
+
+    private static java.util.List<PaletteGroup> createCachedItems() {
         var items = new ArrayList<PaletteGroup>();
         items.add(new PaletteGroup("HTTP", java.util.List.of(
             new PaletteItem("m:", "Method", "Match HTTP method", "GET"),
@@ -880,8 +884,9 @@ public final class UniqueRequestsViewer {
         filterPopup.setSize(Math.max(filterField.getWidth() + 4, 220), palettePanel.getPreferredSize().height);
     }
 
-    private void fillPalettePanelContent() {
+private void fillPalettePanelContent() {
         palettePanel.removeAll();
+        paletteRows.clear();
         for (int gi = 0; gi < paletteItems.size(); gi++) {
             PaletteGroup group = paletteItems.get(gi);
             JPanel headerRow = new JPanel(new BorderLayout());
@@ -901,17 +906,49 @@ public final class UniqueRequestsViewer {
                 row.addMouseListener(new java.awt.event.MouseAdapter() {
                     @Override public void mouseClicked(java.awt.event.MouseEvent e) { applyPaletteSelection(g, i); }
                     @Override public void mouseEntered(java.awt.event.MouseEvent e) {
+                        if (selectedCat == g && selectedItem == i) return;
+                        int oldCat = selectedCat, oldItem = selectedItem;
                         selectedCat = g; selectedItem = i;
-                        SwingUtilities.invokeLater(() -> fillPalettePanelContent());
+                        updatePaletteRow(oldCat, oldItem);
+                        updatePaletteRow(g, i);
                     }
                 });
                 palettePanel.add(row);
+                paletteRows.add(row);
             }
         }
         palettePanel.revalidate();
-        palettePanel.repaint();
     }
 
+    private final java.util.List<JPanel> paletteRows = new ArrayList<>();
+
+    private void updatePaletteRow(int ci, int ii) {
+        if (ci < 0 || ci >= paletteItems.size()) return;
+        var items = paletteItems.get(ci).items();
+        if (ii < 0 || ii >= items.size()) return;
+        int idx = 0;
+        for (int g = 0; g < ci; g++) idx += paletteItems.get(g).items().size();
+        idx += ii;
+        if (idx < paletteRows.size()) {
+            JPanel row = paletteRows.get(idx);
+            boolean sel = ci == selectedCat && ii == selectedItem;
+            row.setBackground(sel ? PREMIUM_ACCENT_BG : PREMIUM_SURFACE);
+            updateRowForegrounds(row, sel);
+        }
+    }
+
+    private void updateRowForegrounds(JPanel row, boolean selected) {
+        for (Component c : row.getComponents()) {
+            if (c instanceof JPanel) updateRowForegrounds((JPanel) c, selected);
+            else if (c instanceof JLabel) {
+                JLabel l = (JLabel) c;
+                Color fg = l.getForeground();
+                if (fg.equals(PREMIUM_ACCENT) || fg.equals(PREMIUM_TEXT)) {
+                    l.setForeground(selected ? PREMIUM_ACCENT : PREMIUM_TEXT);
+                }
+            }
+        }
+    }
     private JPanel paletteRow(String left, String center, String desc, boolean selected) {
         JPanel row = new JPanel(new BorderLayout(10, 0));
         row.setBackground(selected ? PREMIUM_ACCENT_BG : PREMIUM_SURFACE);
@@ -970,6 +1007,14 @@ public final class UniqueRequestsViewer {
      * across the full search blob (all columns + request + response body).
      */
     private void applyFilter() {
+        if (filterDebounce == null) {
+            filterDebounce = new Timer(80, e -> applyFilterNow());
+            filterDebounce.setRepeats(false);
+        }
+        filterDebounce.restart();
+    }
+
+    private void applyFilterNow() {
         List<RowFilter<Object, Object>> filters = new ArrayList<>();
 
         if (sharedChip.isSelected()) {
