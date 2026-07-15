@@ -136,6 +136,16 @@ public final class UniqueRequestsViewer {
     private final Set<Integer> examinedNonUnique = ConcurrentHashMap.newKeySet();
     /** Live mode: highest proxy history id we've scanned — lets incremental polls skip everything below it. */
     private volatile int maxScannedId = -1;
+    /** Live mode: set by {@link #resetAllLiveTracking()} so the next poll wipes {@code seenIds}/{@code liveKeys}/
+     *  {@code examinedNonUnique}/{@code maxScannedId} and does a full re-scan of proxy history — applied on the
+     *  poll thread (race-free) rather than the EDT so an in-flight scan can't re-populate the sets we just wiped. */
+    private volatile boolean forceFullRescan = false;
+    /**
+     * Every active live viewer (the embedded "Yentra Live" tab + any Ctrl+9 pop-ups). "Reset stats" in
+     * {@link YentraTab} walks this set so the proxy-history tracking resets everywhere, not just in the engine.
+     * Entries are removed on close/unload so pop-ups don't leak.
+     */
+    private static final Set<UniqueRequestsViewer> LIVE_VIEWERS = ConcurrentHashMap.newKeySet();
     /** Live mode: unsubscribe from the push feed on dispose/unload (null for the on-demand pop-up). */
     private Runnable feedUnsub;
     private int ticksUntilFullRescan = FULL_RESCAN_TICKS;
@@ -173,18 +183,59 @@ public final class UniqueRequestsViewer {
 
     private static final boolean IS_MAC = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
 
-    private static final Color PREMIUM_BG       = new Color(0xF7, 0xF8, 0xFA);
-    private static final Color PREMIUM_SURFACE   = new Color(0xFF, 0xFF, 0xFF);
-    private static final Color PREMIUM_BORDER    = new Color(0xE2, 0xE5, 0xEA);
-    private static final Color PREMIUM_ACCENT    = new Color(0x4A, 0x6C, 0xF7);
-    private static final Color PREMIUM_ACCENT_BG = new Color(0xEE, 0xF1, 0xFE);
-    private static final Color PREMIUM_TEXT      = new Color(0x1A, 0x1D, 0x24);
-    private static final Color PREMIUM_MUTED     = new Color(0x88, 0x90, 0x9C);
-    private static final Color PREMIUM_SEND      = new Color(0x4A, 0x6C, 0xF7);
-    private static final Color PREMIUM_SEND_HOV  = new Color(0x39, 0x56, 0xD8);
-    private static final Color PREMIUM_DANGER    = new Color(0xE5, 0x48, 0x4D);
-    private static final Color PREMIUM_OK        = new Color(0x12, 0xB7, 0x6A);
-    private static final Color PREMIUM_WARN      = new Color(0xF5, 0x9E, 0x0B);
+    /**
+     * Theme-aware colour palette. Detects Burp's dark/light mode once per viewer
+     * construction and swaps the active {@link #current} set so every component
+     * (panels, table, buttons, chips, palette popup) stays readable in either mode.
+     */
+    static final class Theme {
+        final Color bg, surface, border, accent, accentBg, text, muted;
+        final Color send, sendHov, danger, ok, warn;
+        final Color disabledFg, dangerPressed, defaultPressed, hoverBorder;
+        final Color badgeFg, badgeBg, badgeBorder;
+        final Color chipTextOn, chipTextOff;
+
+        private Theme(Color bg, Color surface, Color border, Color accent, Color accentBg,
+                      Color text, Color muted, Color send, Color sendHov, Color danger,
+                      Color ok, Color warn, Color disabledFg, Color dangerPressed,
+                      Color defaultPressed, Color hoverBorder, Color badgeFg, Color badgeBg,
+                      Color badgeBorder, Color chipTextOn, Color chipTextOff) {
+            this.bg = bg; this.surface = surface; this.border = border;
+            this.accent = accent; this.accentBg = accentBg; this.text = text; this.muted = muted;
+            this.send = send; this.sendHov = sendHov; this.danger = danger;
+            this.ok = ok; this.warn = warn; this.disabledFg = disabledFg;
+            this.dangerPressed = dangerPressed; this.defaultPressed = defaultPressed;
+            this.hoverBorder = hoverBorder; this.badgeFg = badgeFg;
+            this.badgeBg = badgeBg; this.badgeBorder = badgeBorder;
+            this.chipTextOn = chipTextOn; this.chipTextOff = chipTextOff;
+        }
+
+        static final Theme LIGHT = new Theme(
+                new Color(0xF7, 0xF8, 0xFA), new Color(0xFF, 0xFF, 0xFF), new Color(0xE2, 0xE5, 0xEA),
+                new Color(0x4A, 0x6C, 0xF7), new Color(0xEE, 0xF1, 0xFE), new Color(0x1A, 0x1D, 0x24),
+                new Color(0x88, 0x90, 0x9C), new Color(0x4A, 0x6C, 0xF7), new Color(0x39, 0x56, 0xD8),
+                new Color(0xE5, 0x48, 0x4D), new Color(0x12, 0xB7, 0x6A), new Color(0xF5, 0x9E, 0x0B),
+                new Color(0xC0, 0xC4, 0xCC), new Color(0xC0, 0x3A, 0x3F), new Color(0xE8, 0xEC, 0xF4),
+                new Color(0xC0, 0xCB, 0xF7), new Color(0x6B, 0x7A, 0xF0), new Color(0xF0, 0xF3, 0xFE),
+                new Color(0xD8, 0xDF, 0xFE), Color.WHITE, new Color(0x88, 0x90, 0x9C));
+
+        static final Theme DARK = new Theme(
+                new Color(0x1E, 0x21, 0x28), new Color(0x28, 0x2C, 0x36), new Color(0x3A, 0x40, 0x4D),
+                new Color(0x7B, 0x9A, 0xFA), new Color(0x2A, 0x31, 0x44), new Color(0xE4, 0xE6, 0xEB),
+                new Color(0x9B, 0xA1, 0xAD), new Color(0x6B, 0x8A, 0xFA), new Color(0x8A, 0xA2, 0xFB),
+                new Color(0xFF, 0x6B, 0x6E), new Color(0x2D, 0xD4, 0xA8), new Color(0xFB, 0xBF, 0x24),
+                new Color(0x4A, 0x50, 0x60), new Color(0x9A, 0x2D, 0x32), new Color(0x2A, 0x31, 0x44),
+                new Color(0x4A, 0x55, 0x80), new Color(0x8A, 0xA2, 0xFB), new Color(0x2A, 0x31, 0x44),
+                new Color(0x3A, 0x40, 0x60), Color.WHITE, new Color(0x9B, 0xA1, 0xAD));
+
+        static Theme current = LIGHT;
+
+        /** Luminance probe — call on a component that had {@code applyThemeToComponent} applied. */
+        static boolean isDark(Color bg) {
+            if (bg == null) return false;
+            return (bg.getRed() * 299 + bg.getGreen() * 587 + bg.getBlue() * 114) / 1000 < 128;
+        }
+    }
 
     /** Live export: mirror every collected unique request to a file Claude Code can read. */
     private final JCheckBox cbLiveExport = new JCheckBox("Live export → file", false);
@@ -220,6 +271,10 @@ public final class UniqueRequestsViewer {
     private UniqueRequestsViewer(MontoyaApi api, List<HttpRequestResponse> uniques, String title, boolean windowed) {
         this.api = api;
         this.baseTitle = title;
+        // Detect Burp's dark/light theme before building any UI so every colour picks correctly.
+        JPanel probe = new JPanel();
+        api.userInterface().applyThemeToComponent(probe);
+        Theme.current = Theme.isDark(probe.getBackground()) ? Theme.DARK : Theme.LIGHT;
         this.requestEditor = api.userInterface().createHttpRequestEditor(); // editable — inline repeater
         this.responseEditor = api.userInterface().createHttpResponseEditor(EditorOptions.READ_ONLY);
         watchdogInputMethods();
@@ -243,11 +298,11 @@ public final class UniqueRequestsViewer {
 
         JPanel responsePanel = new JPanel(new BorderLayout());
         responseInfo.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, PREMIUM_BORDER),
+                BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.current.border),
                 BorderFactory.createEmptyBorder(5, 10, 5, 10)));
         responseInfo.setFont(responseInfo.getFont().deriveFont(Font.BOLD, 12f));
-        responseInfo.setForeground(PREMIUM_TEXT);
-        responseInfo.setBackground(PREMIUM_BG);
+        responseInfo.setForeground(Theme.current.text);
+        responseInfo.setBackground(Theme.current.bg);
         responseInfo.setOpaque(true);
         responsePanel.add(responseInfo, BorderLayout.NORTH);
         responsePanel.add(responseEditor.uiComponent(), BorderLayout.CENTER);
@@ -266,7 +321,7 @@ public final class UniqueRequestsViewer {
         btnForward.addActionListener(e -> navigateHistory(1));
 
         JPanel editorPanel = new JPanel(new BorderLayout());
-        editorPanel.setBackground(PREMIUM_BG);
+        editorPanel.setBackground(Theme.current.bg);
 
         KeyStroke altLeft = KeyStroke.getKeyStroke(KeyEvent.VK_LEFT, KeyEvent.ALT_DOWN_MASK);
         editorPanel.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(altLeft, "history-back");
@@ -291,14 +346,14 @@ public final class UniqueRequestsViewer {
 
         JLabel targetLabel = new JLabel("Target: ");
         targetLabel.setFont(targetLabel.getFont().deriveFont(Font.PLAIN, 11f));
-        targetLabel.setForeground(PREMIUM_MUTED);
+        targetLabel.setForeground(Theme.current.muted);
 
         JLabel shortcutHint = new JLabel("⌘Space / Ctrl+Space");
         shortcutHint.setFont(shortcutHint.getFont().deriveFont(Font.PLAIN, 10f));
-        shortcutHint.setForeground(PREMIUM_MUTED);
+        shortcutHint.setForeground(Theme.current.muted);
 
         JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 3));
-        toolbar.setBackground(PREMIUM_BG);
+        toolbar.setBackground(Theme.current.bg);
         toolbar.add(btnBack);
         toolbar.add(btnForward);
         toolbar.add(Box.createHorizontalStrut(6));
@@ -310,7 +365,7 @@ public final class UniqueRequestsViewer {
         toolbar.add(Box.createHorizontalStrut(10));
         toolbar.add(targetLabel);
         toolbar.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, PREMIUM_BORDER),
+                BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.current.border),
                 BorderFactory.createEmptyBorder(3, 6, 3, 6)));
 
         editorPanel.add(toolbar, BorderLayout.NORTH);
@@ -318,15 +373,15 @@ public final class UniqueRequestsViewer {
         installSendKeys(editorPanel);
 
         table.setRowHeight(28);
-        table.setSelectionBackground(PREMIUM_ACCENT_BG);
-        table.setSelectionForeground(PREMIUM_TEXT);
-        table.setGridColor(PREMIUM_BORDER);
+        table.setSelectionBackground(Theme.current.accentBg);
+        table.setSelectionForeground(Theme.current.text);
+        table.setGridColor(Theme.current.border);
         table.setShowGrid(false);
         table.setIntercellSpacing(new java.awt.Dimension(0, 0));
         table.getTableHeader().setFont(table.getTableHeader().getFont().deriveFont(Font.BOLD, 11f));
-        table.getTableHeader().setBackground(PREMIUM_BG);
-        table.getTableHeader().setForeground(PREMIUM_MUTED);
-        table.getTableHeader().setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, PREMIUM_BORDER));
+        table.getTableHeader().setBackground(Theme.current.bg);
+        table.getTableHeader().setForeground(Theme.current.muted);
+        table.getTableHeader().setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.current.border));
 
         JSplitPane main = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                 new JScrollPane(table), editorPanel);
@@ -335,15 +390,15 @@ public final class UniqueRequestsViewer {
         main.setDividerSize(6);
 
         status.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(1, 0, 0, 0, PREMIUM_BORDER),
+                BorderFactory.createMatteBorder(1, 0, 0, 0, Theme.current.border),
                 BorderFactory.createEmptyBorder(5, 12, 5, 12)));
         status.setFont(status.getFont().deriveFont(Font.PLAIN, 11f));
-        status.setForeground(PREMIUM_MUTED);
-        status.setBackground(PREMIUM_BG);
+        status.setForeground(Theme.current.muted);
+        status.setBackground(Theme.current.bg);
         status.setOpaque(true);
 
         this.root = new JPanel(new BorderLayout());
-        root.setBackground(PREMIUM_BG);
+        root.setBackground(Theme.current.bg);
         root.add(buildToolbar(), BorderLayout.NORTH);
         root.add(main, BorderLayout.CENTER);
         root.add(status, BorderLayout.SOUTH);
@@ -415,8 +470,9 @@ public final class UniqueRequestsViewer {
         magic.addActionListener(e -> openMagicCookieDialog());
 
         JButton matchReplace = new PremiumButton("Match & Replace", "default");
-        matchReplace.setToolTipText("IDOR/BOLA: replace an id or token in the path/query, body, or both, "
-                + "then reissue the selected request(s) — watch the live results for an unexpected 200.");
+        matchReplace.setToolTipText("IDOR/BOLA: replace an id or token in the path/query, body, headers, "
+                + "or any combination, then reissue the selected request(s) — watch the live results for "
+                + "an unexpected 200. Tick Headers to re-swap a Magic-Cookie session/token.");
         matchReplace.addActionListener(e -> openMatchReplaceDialog());
 
         JButton convertBtn = new PremiumButton("JSON Convert Request To", "default");
@@ -506,14 +562,14 @@ public final class UniqueRequestsViewer {
         filterChips.add(hideOptionsChip);
 
         resultCounter.setFont(resultCounter.getFont().deriveFont(Font.PLAIN, 11f));
-        resultCounter.setForeground(PREMIUM_MUTED);
+        resultCounter.setForeground(Theme.current.muted);
         resultCounter.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 4));
 
         JPanel filterBar = new JPanel(new BorderLayout(4, 0));
         filterBar.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(PREMIUM_BORDER, 1, true),
+                BorderFactory.createLineBorder(Theme.current.border, 1, true),
                 BorderFactory.createEmptyBorder(3, 10, 3, 6)));
-        filterBar.setBackground(PREMIUM_SURFACE);
+        filterBar.setBackground(Theme.current.surface);
         filterBar.add(filterField, BorderLayout.CENTER);
         JPanel rightSide = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
         rightSide.setOpaque(false);
@@ -525,10 +581,10 @@ public final class UniqueRequestsViewer {
         filterField.setBorder(BorderFactory.createEmptyBorder());
         filterField.setFont(filterField.getFont().deriveFont(13f));
         filterField.setBackground(filterBar.getBackground());
-        filterField.setForeground(PREMIUM_TEXT);
+        filterField.setForeground(Theme.current.text);
 
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 5));
-        bar.setBackground(PREMIUM_BG);
+        bar.setBackground(Theme.current.bg);
         bar.add(repeater);
         bar.add(shareBtn);
         bar.add(save);
@@ -540,13 +596,13 @@ public final class UniqueRequestsViewer {
         bar.add(cbLiveExport);
 
         JPanel filterRow = new JPanel(new BorderLayout(8, 0));
-        filterRow.setBackground(PREMIUM_BG);
+        filterRow.setBackground(Theme.current.bg);
         filterRow.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
         filterRow.add(filterBar, BorderLayout.CENTER);
 
         JPanel toolbarPanel = new JPanel();
         toolbarPanel.setLayout(new BoxLayout(toolbarPanel, BoxLayout.Y_AXIS));
-        toolbarPanel.setBackground(PREMIUM_BG);
+        toolbarPanel.setBackground(Theme.current.bg);
         toolbarPanel.add(bar);
         toolbarPanel.add(filterRow);
         return toolbarPanel;
@@ -582,7 +638,7 @@ public final class UniqueRequestsViewer {
             if (isSelected()) {
                 g2.setColor(onColor);
                 g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
-                g2.setColor(Color.WHITE);
+                g2.setColor(Theme.current.chipTextOn);
             } else if (hover) {
                 g2.setColor(new Color(onColor.getRed(), onColor.getGreen(), onColor.getBlue(), 30));
                 g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
@@ -590,11 +646,11 @@ public final class UniqueRequestsViewer {
                 g2.drawRoundRect(0, 0, w - 1, h - 1, arc, arc);
                 g2.setColor(onColor);
             } else {
-                g2.setColor(PREMIUM_SURFACE);
+                g2.setColor(Theme.current.surface);
                 g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
-                g2.setColor(PREMIUM_BORDER);
+                g2.setColor(Theme.current.border);
                 g2.drawRoundRect(0, 0, w - 1, h - 1, arc, arc);
-                g2.setColor(PREMIUM_MUTED);
+                g2.setColor(Theme.current.chipTextOff);
             }
 
             g2.setFont(getFont());
@@ -621,7 +677,7 @@ public final class UniqueRequestsViewer {
         btn.setBorderPainted(false);
         btn.setContentAreaFilled(false);
         btn.setOpaque(false);
-        btn.setForeground(PREMIUM_TEXT);
+        btn.setForeground(Theme.current.text);
         btn.setCursor(new java.awt.Cursor(java.awt.Cursor.HAND_CURSOR));
     }
 
@@ -665,25 +721,25 @@ public final class UniqueRequestsViewer {
 
             Color bg, fg, border;
             if (!isEnabled()) {
-                bg = PREMIUM_BG;
-                fg = new Color(0xC0, 0xC4, 0xCC);
-                border = PREMIUM_BORDER;
+                bg = Theme.current.bg;
+                fg = Theme.current.disabledFg;
+                border = Theme.current.border;
             } else if (type.equals("primary")) {
-                bg = pressed ? PREMIUM_SEND_HOV : hover ? PREMIUM_SEND_HOV : PREMIUM_SEND;
+                bg = pressed ? Theme.current.sendHov : hover ? Theme.current.sendHov : Theme.current.send;
                 fg = Color.WHITE;
                 border = bg;
             } else if (type.equals("nav")) {
-                bg = pressed ? PREMIUM_ACCENT_BG : hover ? PREMIUM_ACCENT_BG : PREMIUM_SURFACE;
-                fg = pressed ? PREMIUM_ACCENT : hover ? PREMIUM_ACCENT : PREMIUM_MUTED;
-                border = hover ? PREMIUM_ACCENT : PREMIUM_BORDER;
+                bg = pressed ? Theme.current.accentBg : hover ? Theme.current.accentBg : Theme.current.surface;
+                fg = pressed ? Theme.current.accent : hover ? Theme.current.accent : Theme.current.muted;
+                border = hover ? Theme.current.accent : Theme.current.border;
             } else if (type.equals("danger")) {
-                bg = pressed ? new Color(0xC0, 0x3A, 0x3F) : hover ? PREMIUM_DANGER : PREMIUM_SURFACE;
-                fg = hover ? Color.WHITE : PREMIUM_DANGER;
-                border = hover ? PREMIUM_DANGER : PREMIUM_BORDER;
+                bg = pressed ? Theme.current.dangerPressed : hover ? Theme.current.danger : Theme.current.surface;
+                fg = hover ? Color.WHITE : Theme.current.danger;
+                border = hover ? Theme.current.danger : Theme.current.border;
             } else {
-                bg = pressed ? new Color(0xE8, 0xEC, 0xF4) : hover ? PREMIUM_ACCENT_BG : PREMIUM_SURFACE;
-                fg = hover ? PREMIUM_ACCENT : PREMIUM_TEXT;
-                border = hover ? new Color(0xC0, 0xCB, 0xF7) : PREMIUM_BORDER;
+                bg = pressed ? Theme.current.defaultPressed : hover ? Theme.current.accentBg : Theme.current.surface;
+                fg = hover ? Theme.current.accent : Theme.current.text;
+                border = hover ? Theme.current.hoverBorder : Theme.current.border;
             }
 
             g2.setColor(bg);
@@ -851,9 +907,9 @@ public final class UniqueRequestsViewer {
         }
         palettePanel = new JPanel();
         palettePanel.setLayout(new BoxLayout(palettePanel, BoxLayout.Y_AXIS));
-        palettePanel.setBackground(PREMIUM_SURFACE);
+        palettePanel.setBackground(Theme.current.surface);
         palettePanel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(PREMIUM_BORDER, 1, true),
+                BorderFactory.createLineBorder(Theme.current.border, 1, true),
                 BorderFactory.createEmptyBorder(8, 0, 4, 0)));
         fillPalettePanelContent();
         filterPopup.getContentPane().removeAll();
@@ -876,7 +932,7 @@ public final class UniqueRequestsViewer {
         JPanel row = paletteRow(null, hint, null, false);
         palettePanel.add(row);
         palettePanel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(PREMIUM_BORDER, 1, true),
+                BorderFactory.createLineBorder(Theme.current.border, 1, true),
                 BorderFactory.createEmptyBorder(8, 16, 8, 16)));
         filterPopup.pack();
         java.awt.Point p = filterField.getLocationOnScreen();
@@ -890,11 +946,11 @@ private void fillPalettePanelContent() {
         for (int gi = 0; gi < paletteItems.size(); gi++) {
             PaletteGroup group = paletteItems.get(gi);
             JPanel headerRow = new JPanel(new BorderLayout());
-            headerRow.setBackground(PREMIUM_SURFACE);
+            headerRow.setBackground(Theme.current.surface);
             headerRow.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 24));
             JLabel header = new JLabel("  " + group.label().toUpperCase());
             header.setFont(header.getFont().deriveFont(Font.BOLD, 10f));
-            header.setForeground(PREMIUM_MUTED);
+            header.setForeground(Theme.current.muted);
             header.setBorder(BorderFactory.createEmptyBorder(gi > 0 ? 10 : 2, 16, 4, 0));
             headerRow.add(header, BorderLayout.WEST);
             palettePanel.add(headerRow);
@@ -932,7 +988,7 @@ private void fillPalettePanelContent() {
         if (idx < paletteRows.size()) {
             JPanel row = paletteRows.get(idx);
             boolean sel = ci == selectedCat && ii == selectedItem;
-            row.setBackground(sel ? PREMIUM_ACCENT_BG : PREMIUM_SURFACE);
+            row.setBackground(sel ? Theme.current.accentBg : Theme.current.surface);
             updateRowForegrounds(row, sel);
         }
     }
@@ -943,15 +999,15 @@ private void fillPalettePanelContent() {
             else if (c instanceof JLabel) {
                 JLabel l = (JLabel) c;
                 Color fg = l.getForeground();
-                if (fg.equals(PREMIUM_ACCENT) || fg.equals(PREMIUM_TEXT)) {
-                    l.setForeground(selected ? PREMIUM_ACCENT : PREMIUM_TEXT);
+                if (fg.equals(Theme.current.accent) || fg.equals(Theme.current.text)) {
+                    l.setForeground(selected ? Theme.current.accent : Theme.current.text);
                 }
             }
         }
     }
     private JPanel paletteRow(String left, String center, String desc, boolean selected) {
         JPanel row = new JPanel(new BorderLayout(10, 0));
-        row.setBackground(selected ? PREMIUM_ACCENT_BG : PREMIUM_SURFACE);
+        row.setBackground(selected ? Theme.current.accentBg : Theme.current.surface);
         row.setBorder(BorderFactory.createEmptyBorder(6, 16, 6, 16));
         row.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 34));
 
@@ -961,25 +1017,25 @@ private void fillPalettePanelContent() {
         if (left != null) {
             JLabel badge = new JLabel(left);
             badge.setFont(new Font(Font.MONOSPACED, Font.BOLD, 12));
-            badge.setForeground(selected ? PREMIUM_ACCENT : new Color(0x6B, 0x7A, 0xF0));
-            badge.setBackground(selected ? PREMIUM_ACCENT_BG : new Color(0xF0, 0xF3, 0xFE));
+            badge.setForeground(selected ? Theme.current.accent : Theme.current.badgeFg);
+            badge.setBackground(selected ? Theme.current.accentBg : Theme.current.badgeBg);
             badge.setOpaque(true);
             badge.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(selected ? PREMIUM_ACCENT : new Color(0xD8, 0xDF, 0xFE), 1, true),
+                    BorderFactory.createLineBorder(selected ? Theme.current.accent : Theme.current.badgeBorder, 1, true),
                     BorderFactory.createEmptyBorder(1, 6, 1, 6)));
             leftPanel.add(badge);
         }
 
         JLabel c = new JLabel(center);
         c.setFont(c.getFont().deriveFont(Font.PLAIN, 13f));
-        c.setForeground(selected ? PREMIUM_ACCENT : PREMIUM_TEXT);
+        c.setForeground(selected ? Theme.current.accent : Theme.current.text);
         leftPanel.add(c);
         row.add(leftPanel, BorderLayout.WEST);
 
         if (desc != null) {
             JLabel r = new JLabel(desc);
             r.setFont(r.getFont().deriveFont(Font.PLAIN, 11f));
-            r.setForeground(PREMIUM_MUTED);
+            r.setForeground(Theme.current.muted);
             row.add(r, BorderLayout.EAST);
         }
         return row;
@@ -1496,6 +1552,7 @@ private void fillPalettePanelContent() {
     }
 
     private void startLivePolling() {
+        LIVE_VIEWERS.add(this);     // registered so "Reset stats" can reach this viewer's proxy-history tracking
         log("Live unique history — push from the proxy handler, with a history back-fill poll…");
         cbLiveExport.setSelected(true);  // the live window auto-exports every unique by default
         scheduleLiveExport();            // create the (initially empty) export file right away
@@ -1509,6 +1566,7 @@ private void fillPalettePanelContent() {
                 @Override public void windowClosed(WindowEvent e) {
                     if (liveTimer != null) liveTimer.stop();
                     unsubscribeFeed();
+                    LIVE_VIEWERS.remove(this);
                 }
             });
         }
@@ -1520,11 +1578,36 @@ private void fillPalettePanelContent() {
             api.extension().registerUnloadingHandler(() -> SwingUtilities.invokeLater(() -> {
                 if (liveTimer != null) liveTimer.stop();
                 unsubscribeFeed();
+                LIVE_VIEWERS.remove(this);
                 if (frame != null) frame.dispose();
             }));
         } catch (RuntimeException ignored) {
             // best-effort; the per-poll self-stop is the safety net if this can't register
         }
+    }
+
+    /**
+     * Wipes every active live viewer's proxy-history tracking ({@code seenIds}, {@code liveKeys},
+     * {@code examinedNonUnique}, {@code maxScannedId}) and its table, then re-scans from id 0 — so
+     * "Reset stats" in {@link YentraTab} restarts the live counts too, not just the engine's. The
+     * table is cleared on the EDT; the tracking wipe happens on the next poll thread (via
+     * {@code forceFullRescan}) so a scan already in flight can't repopulate the sets under us. Safe
+     * to call from any thread (no-op if no live viewer is open).
+     */
+    public static void resetAllLiveTracking() {
+        for (UniqueRequestsViewer v : LIVE_VIEWERS) v.resetLiveTracking();
+    }
+
+    private void resetLiveTracking() {
+        forceFullRescan = true;                    // applied at the top of the next poll (race-free)
+        SwingUtilities.invokeLater(() -> {
+            model.clear();
+            refreshTitle();
+            updateCount();
+            scheduleLiveExport();
+            status.setText("Proxy history tracking reset — re-scanning…");
+        });
+        pollHistory();                              // kick a scan now (skipped if one's already running)
     }
 
     /** Drops the push-feed subscription (idempotent; no-op for the on-demand pop-up). */
@@ -1555,6 +1638,15 @@ private void fillPalettePanelContent() {
                 boolean fullPass = examinedNonUnique.isEmpty();
                 if (--ticksUntilFullRescan <= 0) {       // periodic full re-examine (late "Stamp history" marks)
                     examinedNonUnique.clear();
+                    ticksUntilFullRescan = FULL_RESCAN_TICKS;
+                    fullPass = true;
+                }
+                if (forceFullRescan) {                  // "Reset stats" → re-scan proxy history from scratch
+                    forceFullRescan = false;
+                    seenIds.clear();
+                    liveKeys.clear();
+                    examinedNonUnique.clear();
+                    maxScannedId = -1;
                     ticksUntilFullRescan = FULL_RESCAN_TICKS;
                     fullPass = true;
                 }
@@ -1746,7 +1838,7 @@ private void fillPalettePanelContent() {
     private void showResponseInfo(HttpResponse resp, long elapsedMs) {
         if (resp == null) {
             responseInfo.setText(" ");
-            responseInfo.setForeground(PREMIUM_MUTED);
+            responseInfo.setForeground(Theme.current.muted);
             return;
         }
         StringBuilder sb = new StringBuilder();
@@ -1757,11 +1849,11 @@ private void fillPalettePanelContent() {
         sb.append("  |  ").append(formatBytes(resp.body().length()));
         if (elapsedMs >= 0) sb.append("  |  ").append(elapsedMs).append(" ms");
         responseInfo.setText(sb.toString());
-        if (code >= 200 && code < 300) responseInfo.setForeground(PREMIUM_OK);
-        else if (code >= 300 && code < 400) responseInfo.setForeground(PREMIUM_ACCENT);
-        else if (code >= 400 && code < 500) responseInfo.setForeground(PREMIUM_WARN);
-        else if (code >= 500) responseInfo.setForeground(PREMIUM_DANGER);
-        else responseInfo.setForeground(PREMIUM_TEXT);
+        if (code >= 200 && code < 300) responseInfo.setForeground(Theme.current.ok);
+        else if (code >= 300 && code < 400) responseInfo.setForeground(Theme.current.accent);
+        else if (code >= 400 && code < 500) responseInfo.setForeground(Theme.current.warn);
+        else if (code >= 500) responseInfo.setForeground(Theme.current.danger);
+        else responseInfo.setForeground(Theme.current.text);
     }
 
     private static String formatBytes(int b) {
@@ -2266,6 +2358,7 @@ private void fillPalettePanelContent() {
     private static final String PREF_MR_REPLACE = "yentra.match-replace.replace";
     private static final String PREF_MR_PATH    = "yentra.match-replace.path";
     private static final String PREF_MR_BODY    = "yentra.match-replace.body";
+    private static final String PREF_MR_HEADERS = "yentra.match-replace.headers";
     private static final String PREF_MR_REGEX   = "yentra.match-replace.regex";
 
     /**
@@ -2284,12 +2377,15 @@ private void fillPalettePanelContent() {
         JTextField replaceField = new JTextField(orEmpty(prefs.getString(PREF_MR_REPLACE)), 22);
         JCheckBox cbPath = new JCheckBox("Path / query", boolDefault(prefs.getBoolean(PREF_MR_PATH), true));
         JCheckBox cbBody = new JCheckBox("Body", boolDefault(prefs.getBoolean(PREF_MR_BODY), true));
+        JCheckBox cbHeaders = new JCheckBox("Headers", boolDefault(prefs.getBoolean(PREF_MR_HEADERS), false));
         JCheckBox cbRegex = new JCheckBox("regex", boolDefault(prefs.getBoolean(PREF_MR_REGEX), false));
 
         JLabel help = new JLabel("<html>For <b>IDOR / BOLA</b>: replace an object id (or any token) in the "
-                + "request's <b>path/query</b>, <b>body</b>, or both, then reissue. <b>Only requests that "
-                + "actually contain the match are sent</b> (the rest are skipped); within each, everything "
-                + "but the matched value is left unchanged. Watch the results for a <b>200</b> where another "
+                + "request's <b>path/query</b>, <b>body</b>, <b>headers</b>, or any combination, then reissue. "
+                + "<b>Only requests that actually contain the match are sent</b> (the rest are skipped); within "
+                + "each, everything but the matched value is left unchanged. <b>Headers</b> covers every header "
+                + "value — Cookie, Authorization, X-User-Id, etc. — so a Magic-Cookie-swapped request can have its "
+                + "session/token re-swapped here too. Watch the results for a <b>200</b> where another "
                 + "identity's value should be denied.</html>");
         help.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
 
@@ -2303,7 +2399,7 @@ private void fillPalettePanelContent() {
         g.gridx = 1; g.weightx = 1; g.fill = GridBagConstraints.HORIZONTAL; form.add(replaceField, g);
         g.gridx = 0; g.gridy = 2; g.weightx = 0; g.fill = GridBagConstraints.NONE; form.add(new JLabel("Apply to:"), g);
         JPanel scope = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        scope.add(cbPath); scope.add(cbBody); scope.add(cbRegex);
+        scope.add(cbPath); scope.add(cbBody); scope.add(cbHeaders); scope.add(cbRegex);
         g.gridx = 1; form.add(scope, g);
 
         JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(table), "Match & Replace — IDOR");
@@ -2319,7 +2415,8 @@ private void fillPalettePanelContent() {
             if (match == null || match.isEmpty()) { warn(dialog, "Enter the text to match."); return; }
             boolean inPath = cbPath.isSelected();
             boolean inBody = cbBody.isSelected();
-            if (!inPath && !inBody) { warn(dialog, "Pick at least one of Path/query or Body."); return; }
+            boolean inHeaders = cbHeaders.isSelected();
+            if (!inPath && !inBody && !inHeaders) { warn(dialog, "Pick at least one of Path/query, Body, or Headers."); return; }
             boolean regex = cbRegex.isSelected();
             if (regex) {
                 try { Pattern.compile(match); }
@@ -2331,11 +2428,12 @@ private void fillPalettePanelContent() {
             prefs.setString(PREF_MR_REPLACE, replace);
             prefs.setBoolean(PREF_MR_PATH, inPath);
             prefs.setBoolean(PREF_MR_BODY, inBody);
+            prefs.setBoolean(PREF_MR_HEADERS, inHeaders);
             prefs.setBoolean(PREF_MR_REGEX, regex);
 
-            String scopeLabel = (inPath && inBody) ? "path+body" : inPath ? "path/query" : "body";
+            String scopeLabel = scopeLabel(inPath, inBody, inHeaders);
             streamReissue(currentSel, "Match & Replace results",
-                    req -> applyMatchReplace(req, match, replace, inPath, inBody, regex),
+                    req -> applyMatchReplace(req, match, replace, inPath, inBody, inHeaders, regex),
                     "Match & Replace — \"" + match + "\" -> \"" + replace + "\" in " + scopeLabel
                             + (regex ? " (regex)" : "") + " across " + currentSel.size() + " request(s)");
         });
@@ -2360,15 +2458,18 @@ private void fillPalettePanelContent() {
 
     /**
      * Returns {@code req} with {@code match}→{@code replace} applied to the selected parts: the
-     * path (which in Montoya includes the query string) and/or the body. Literal by default, or
-     * regex when {@code regex} is set; {@link HttpRequest#withBody(String)} refreshes Content-Length.
+     * path (which in Montoya includes the query string), the body, and/or every header value. Literal
+     * by default, or regex when {@code regex} is set; {@link HttpRequest#withBody(String)} refreshes
+     * Content-Length. Header values are rewritten in place via {@link HttpRequest#withUpdatedHeader}.
      *
      * <p>Returns {@code null} if the match wasn't present in any selected part — i.e. nothing
      * changed. {@link #streamReissue} skips those, so only the requests that actually carried the id
-     * (and therefore had it swapped) are reissued.
+     * (and therefore had it swapped) are reissued. This is why a Magic-Cookie result whose token lives
+     * only in a header (Cookie / Authorization) was previously "not sent" unless Headers was ticked:
+     * with no match in path or body, {@code null} came back and the request was skipped.
      */
     private static HttpRequest applyMatchReplace(HttpRequest req, String match, String replace,
-                                                 boolean inPath, boolean inBody, boolean regex) {
+                                                 boolean inPath, boolean inBody, boolean inHeaders, boolean regex) {
         HttpRequest out = req;
         boolean changed = false;
         if (inPath) {
@@ -2385,7 +2486,27 @@ private void fillPalettePanelContent() {
                 if (!nb.equals(b)) { out = out.withBody(nb); changed = true; }
             }
         }
+        if (inHeaders) {
+            // Iterate the original headers so a withUpdatedHeader mid-loop doesn't shift the list
+            // under us. withUpdatedHeader rewrites every header sharing the name — fine for the IDOR
+            // case (Cookie / Authorization / X-User-Id are single-valued in practice).
+            for (HttpHeader h : req.headers()) {
+                String v = h.value();
+                if (v == null || v.isEmpty()) continue;
+                String nv = regex ? v.replaceAll(match, replace) : v.replace(match, replace);
+                if (!nv.equals(v)) { out = out.withUpdatedHeader(h.name(), nv); changed = true; }
+            }
+        }
         return changed ? out : null; // null → match absent here; streamReissue won't reissue it
+    }
+
+    /** Short label for the log line, e.g. {@code "path+body"}, {@code "headers"}, {@code "path+headers"}. */
+    private static String scopeLabel(boolean inPath, boolean inBody, boolean inHeaders) {
+        StringBuilder sb = new StringBuilder();
+        if (inPath)    sb.append(sb.length() == 0 ? "path/query" : "+path");
+        if (inBody)    sb.append(sb.length() == 0 ? "body" : "+body");
+        if (inHeaders) sb.append(sb.length() == 0 ? "headers" : "+headers");
+        return sb.length() == 0 ? "none" : sb.toString();
     }
 
     private static String orEmpty(String s) { return s == null ? "" : s; }

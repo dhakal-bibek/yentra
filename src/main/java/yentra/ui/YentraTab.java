@@ -181,7 +181,9 @@ public final class YentraTab {
                 + "<b>Required for any change to take effect.</b> It <b>clears the seen-set</b>, so counts restart "
                 + "and live stamping re-classifies from scratch (keeps verdicts consistent).</html>");
         JButton btnReset = new JButton("Reset stats");
-        btnReset.setToolTipText("Zero the counters and clear the seen-set, without changing the signature config.");
+        btnReset.setToolTipText("<html>Zero the counters and clear the seen-set, without changing the signature config.<br>"
+                + "Also resets the <b>Yentra Live</b> proxy-history tracking (seen ids / live keys) and re-scans,<br>"
+                + "so the live counts restart in lockstep with the engine.</html>");
         JButton btnLiveUnique = new JButton("Live unique window ▶");
         btnLiveUnique.setToolTipText("Open a live, HTTP-history-style window showing only unique requests — "
                 + "back-filled from history, then deduplicated in real time as you browse (Logger-style).");
@@ -281,7 +283,10 @@ public final class YentraTab {
         btnApply.addActionListener(e -> applyToEngine());
         btnReset.addActionListener(e -> {
             engine.reset();
-            api.logging().logToOutput("[yentra] stats reset");
+            // Also wipe the live viewer's proxy-history tracking (seenIds / liveKeys / examinedNonUnique /
+            // maxScannedId) and re-scan, so the "Yentra Live" counts restart too — not just the engine's.
+            UniqueRequestsViewer.resetAllLiveTracking();
+            api.logging().logToOutput("[yentra] stats reset (engine + live proxy-history tracking)");
             refreshStats();
         });
         cbEnabled.addActionListener(e -> {

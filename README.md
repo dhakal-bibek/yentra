@@ -185,7 +185,7 @@ An always-on, auto-refreshing feed of **only** the `[YENTRA] UNIQUE` requests. O
 | **Share** | Shares the selected request with connected Live Share peers |
 | **Save for AI** | Exports selected rows to a `.http` file with case manifests for AI consumption |
 | **Magic Cookie** | Reissue selected requests with swapped auth headers — ideal for same-request / different-identity IDOR/BOLA |
-| **Match & Replace** | Swap IDs/tokens in path or body and reissue — watch for unexpected `200` responses |
+| **Match & Replace** | Swap IDs/tokens in path, body, or headers and reissue — watch for unexpected `200` responses |
 | **Clear** | Empties the table (already-seen IDs won't reappear in live mode) |
 | **Live export → file** | Mirrors the feed to `~/.yentra/<project>/` for AI bridge |
 | **Filter bar** | Bambda-style prefix tokens, plain text, and filter chips |
@@ -289,15 +289,17 @@ Strips the request's existing Cookie and Authorization (plus any header you list
 
 ### Match & Replace
 
-Swaps an ID or token in the path/query, body, or both — then reissues.
+Swaps an ID or token in the path/query, body, headers, or any combination — then reissues.
 
 1. Select requests → **Match & Replace**
 2. Enter **Match** text and **Replace** text
-3. Choose **Path/query**, **Body**, or both
+3. Choose **Path/query**, **Body**, **Headers**, or any combination
 4. Optionally tick **regex**
 5. Click **Replace & send**
 
 Only requests containing the match are sent (others skipped). The dialog stays open — change values, select new rows, send again. Settings are remembered across sessions.
+
+**Headers** rewrites every header value (Cookie, Authorization, X-User-Id, …), so a request whose token lives only in a header is actually sent instead of being skipped. This is what you want after **Magic Cookie**: tick Headers to re-swap the session/token the cookie change just put in place, then reissue.
 
 ---
 
