@@ -394,13 +394,12 @@ Burp's MCP server cannot see custom extension windows, so Yentra uses the **file
   selection.http     ← current table selection
 ```
 
-The folder is named after the current Burp project. Each entry is a `####`-delimited request+response block prefixed with a **case manifest** — five fields the AI reads before touching payloads:
+The folder is named after the current Burp project. Each entry is a `####`-delimited request+response block prefixed with a **case manifest** — four fields the AI reads before touching payloads:
 
 1. **Source request** — method + URL
 2. **Identity role** — `attacker` / `victim` (from `X-AI-Use` header or `[attacker]/[victim]` tag)
 3. **Why it's unique** — the Yentra verdict and signature rationale
 4. **Replay command** — a ready-to-run `curl` (auth + body included; body omitted if > 4 KB)
-5. **Expected safe failure** — the IDOR/BOLA oracle: replayed under a different identity this should be denied (401/403/404); a 200 with another identity's data is the finding
 
 **Workflow:** Open Yentra Live → it fills with `[YENTRA] UNIQUE` requests and mirrors them → in Claude Code: *"read `~/.yentra/<project>/live-unique.http`"*. The toggle is on by default in live mode. Tick **Responses: body only, pretty JSON** when saving for AI to get clean JSON without headers.
 

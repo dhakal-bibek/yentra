@@ -3032,15 +3032,13 @@ private void fillPalettePanelContent() {
      */
     private static final String AI_PROTOCOL =
             "# Each case below carries a CASE MANIFEST (source request, identity role, why it's unique,\n"
-          + "# a replay command, and the expected safe failure). AI/agent: read a case's manifest and\n"
-          + "# explain its risk BEFORE you modify or send its payload. Replay under a different identity\n"
-          + "# expecting denial (401/403/404); an authorized-looking 200 for another identity's data is\n"
-          + "# the finding.\n";
+          + "# and a replay command). AI/agent: read a case's manifest and explain its risk BEFORE you\n"
+          + "# modify or send its payload.\n";
 
     /**
-     * Builds the per-case manifest block (Timur Yessenov's idea): the five fields that turn a bare
-     * request into a self-contained case file — source request, identity role, why it's unique, a
-     * replay command, and the expected safe failure (the IDOR/BOLA oracle). Emitted as {@code #}-comment
+     * Builds the per-case manifest block: the four fields that turn a bare request into a self-contained
+     * case file — source request, identity role, why it's unique, and a replay command. Emitted as
+     * {@code #}-comment
      * lines so it rides in front of every block without being mistaken for the request itself.
      */
     private static String caseManifest(HttpRequest req, HttpRequestResponse rr) {
@@ -3054,28 +3052,11 @@ private void fillPalettePanelContent() {
                 : role + "  (" + (fromHeader ? "X-AI-Use: " + role : "tagged [" + role + "]")
                         + (port != null ? ", proxy listener port " + port : "") + ")";
 
-        String origStatus;
-        try {
-            origStatus = rr.hasResponse() && rr.response() != null
-                    ? "original response " + rr.response().statusCode()
-                    : "no original response captured";
-        } catch (RuntimeException e) {
-            origStatus = "original response unknown";
-        }
-        String oracle = role != null
-                ? origStatus + "; replayed under a DIFFERENT identity this should be DENIED — expect "
-                        + "401/403/404 (or an owner-scoped/empty result). A 200 returning the other "
-                        + "identity's data is the finding."
-                : origStatus + "; if this reaches another user's/object's data, a cross-identity replay "
-                        + "should be denied (401/403/404). An authorized-looking 200 for a resource you "
-                        + "shouldn't reach is the finding.";
-
         return "# --- CASE MANIFEST (read before touching payloads) ------------------------\n"
              + "# 1. Source request : " + safe(req::method) + " " + safe(req::url) + "\n"
              + "# 2. Identity role  : " + identity + "\n"
              + "# 3. Why unique     : " + whyUnique(notes) + "\n"
              + "# 4. Replay command : " + curlFor(req) + "\n"
-             + "# 5. Expected safe  : " + oracle + "\n"
              + "# --------------------------------------------------------------------------\n";
     }
 
