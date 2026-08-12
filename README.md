@@ -67,7 +67,7 @@ Burp Suite extension + port-based highlighter: dedupes proxy history into a live
 
 1. Burp → **Extensions** → **Installed** → **Add**
 2. Extension type: **Java**
-3. Select `yentra-0.1.0-SNAPSHOT.jar`
+3. Download the JAR from the [latest release](https://github.com/dhakal-bibek/yentra/releases/latest) and select it
 4. Three tabs appear: **Yentra**, **Yentra Live**, **Yentra Share**
 
 ---
@@ -197,6 +197,8 @@ A full Repeater-style interface embedded below the table:
 - **Request (left)** — editable Montoya HTTP request editor
 - **Response (right)** — read-only response viewer with prominent status bar
 - **Send ▶** button fires via Burp's HTTP client; lands in **Logger**, not Proxy history
+- **Safe body editing** — automatically recalculates an existing `Content-Length` from the raw body bytes, so spaces, Unicode, and other edits are sent correctly over HTTP/1.1 and HTTP/2
+- **Latest-response ownership** — slow responses from older sends cannot overwrite a newer request, response, or table selection
 - **Keyboard shortcuts:** `Cmd+Space` / `Ctrl+Space` (primary), `Ctrl+Enter` (fallback)
 - **Reset** restores the request to its original state from the table
 
@@ -210,6 +212,7 @@ Shown above the response editor with status-code-colored text:
 | 3xx | Indigo | `HTTP 302 Found  \|  0 bytes  \|  89 ms` |
 | 4xx | Amber | `HTTP 404 Not Found  \|  234 bytes  \|  45 ms` |
 | 5xx | Red | `HTTP 500 Internal Server Error  \|  567 bytes  \|  1203 ms` |
+| No response | Amber | `No response received  \|  30001 ms` (check Burp Logger for connection details) |
 
 ### History Navigation
 

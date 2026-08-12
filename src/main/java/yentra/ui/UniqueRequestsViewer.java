@@ -88,6 +88,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 import java.util.function.BiConsumer;
@@ -245,6 +246,12 @@ public final class UniqueRequestsViewer {
 
     private final java.util.List<RepeaterEntry> repeaterHistory = new ArrayList<>();
     private int historyPos = -1;
+    /**
+     * Identifies the request/response currently allowed to own the inline Repeater panes. Selecting
+     * another row or starting another send invalidates an older in-flight send, so a slow response
+     * cannot unexpectedly replace the newer request's response.
+     */
+    private final AtomicLong repeaterViewGeneration = new AtomicLong();
     private final JLabel responseInfo = new JLabel(" ");
     private final JLabel resultCounter = new JLabel("");
     private final JButton btnBack = new PremiumButton("◀", "nav");
@@ -1826,6 +1833,7 @@ private void fillPalettePanelContent() {
     private void showRow(int modelRow) {
         Row row = model.rowAt(modelRow);
         if (row == null || row.rr == null) return;
+        repeaterViewGeneration.incrementAndGet();
         HttpRequestResponse rr = row.rr;
         requestEditor.setRequest(rr.request());
         this.originalRequest = rr.request();
@@ -1837,8 +1845,10 @@ private void fillPalettePanelContent() {
 
     private void showResponseInfo(HttpResponse resp, long elapsedMs) {
         if (resp == null) {
-            responseInfo.setText(" ");
-            responseInfo.setForeground(Theme.current.muted);
+            String text = "No response received";
+            if (elapsedMs >= 0) text += "  |  " + elapsedMs + " ms";
+            responseInfo.setText(text);
+            responseInfo.setForeground(Theme.current.warn);
             return;
         }
         StringBuilder sb = new StringBuilder();
@@ -1865,6 +1875,7 @@ private void fillPalettePanelContent() {
     private void navigateHistory(int delta) {
         int newPos = historyPos + delta;
         if (newPos < 0 || newPos >= repeaterHistory.size()) return;
+        repeaterViewGeneration.incrementAndGet();
         RepeaterEntry entry = repeaterHistory.get(newPos);
         requestEditor.setRequest(entry.request());
         responseEditor.setResponse(entry.response() != null ? entry.response() : HttpResponse.httpResponse());
@@ -1882,6 +1893,7 @@ private void fillPalettePanelContent() {
 
     private void resetRequest() {
         if (originalRequest != null) {
+            repeaterViewGeneration.incrementAndGet();
             requestEditor.setRequest(originalRequest);
             status.setText("Request reset to original.");
         } else {
@@ -1890,19 +1902,21 @@ private void fillPalettePanelContent() {
     }
 
     private void sendEditedRequest() {
-        HttpRequest req;
+        HttpRequest editorRequest;
         try {
-            req = requestEditor.getRequest();
+            editorRequest = requestEditor.getRequest();
         } catch (RuntimeException ex) {
             status.setText("Couldn't read the edited request: " + ex.getMessage());
             return;
         }
-        if (req == null || req.httpService() == null) {
+        if (editorRequest == null || editorRequest.httpService() == null) {
             status.setText("Select a row first, then edit the request and Send.");
             return;
         }
+        HttpRequest req = withCorrectContentLength(editorRequest);
         status.setText("Sending…");
         responseInfo.setText("Sending…");
+        long viewGeneration = repeaterViewGeneration.incrementAndGet();
         Thread t = new Thread(() -> {
             long t0 = System.currentTimeMillis();
             try {
@@ -1910,16 +1924,19 @@ private void fillPalettePanelContent() {
                 long ms = System.currentTimeMillis() - t0;
                 HttpResponse resp = out != null && out.hasResponse() ? out.response() : null;
                 SwingUtilities.invokeLater(() -> {
+                    addRepeaterEntry(req, resp, ms);
+                    if (repeaterViewGeneration.get() != viewGeneration) return;
                     responseEditor.setResponse(resp != null ? resp : HttpResponse.httpResponse());
                     showResponseInfo(resp, ms);
-                    status.setText("Done.");
-                    addRepeaterEntry(req, resp, ms);
+                    status.setText(resp != null ? "Done." : "No response received; check Burp Logger for connection details.");
                 });
                 log("Repeater  " + safeReqLine(req) + "   ←   "
                         + (resp != null ? resp.statusCode() + " " + resp.body().length() + "b" : "(no response)"));
             } catch (RuntimeException ex) {
                 SwingUtilities.invokeLater(() -> {
+                    if (repeaterViewGeneration.get() != viewGeneration) return;
                     responseInfo.setText("Send failed");
+                    responseInfo.setForeground(Theme.current.danger);
                     status.setText("Send failed: " + ex.getMessage());
                 });
                 api.logging().logToError("[yentra] inline repeater send failed: " + ex);
@@ -1927,6 +1944,20 @@ private void fillPalettePanelContent() {
         }, "yentra-repeater-send");
         t.setDaemon(true);
         t.start();
+    }
+
+    /**
+     * Keeps an explicitly present Content-Length consistent with edits made in the embedded request
+     * editor. The length is calculated from Montoya's raw body bytes rather than Java characters,
+     * which is essential for spaces, Unicode, and other multi-byte input. A request without a
+     * Content-Length is left alone (HTTP/2 does not require one).
+     */
+    private static HttpRequest withCorrectContentLength(HttpRequest req) {
+        if (req == null || !req.hasHeader("Content-Length")) return req;
+        String actual = Integer.toString(req.body().length());
+        String declared = req.headerValue("Content-Length");
+        if (actual.equals(declared == null ? null : declared.trim())) return req;
+        return req.withUpdatedHeader("Content-Length", actual);
     }
 
     private void addRepeaterEntry(HttpRequest req, HttpResponse resp, long ms) {
