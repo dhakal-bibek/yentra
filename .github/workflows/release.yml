@@ -37,15 +37,20 @@ jobs:
       - name: Build
         run: |
           if [ -n "${{ steps.ver.outputs.version }}" ]; then
-            ./gradlew --no-daemon -Pversion=${{ steps.ver.outputs.version }} build
+            ./gradlew --no-daemon -Pversion=${{ steps.ver.outputs.version }} clean build
           else
-            ./gradlew --no-daemon build
+            ./gradlew --no-daemon clean build
           fi
 
       - name: Locate JAR
         id: jar
         run: |
-          jar=$(ls build/libs/yentra-*.jar | head -n1)
+          if [ -n "${{ steps.ver.outputs.version }}" ]; then
+            jar="build/libs/yentra-${{ steps.ver.outputs.version }}.jar"
+          else
+            jar=$(ls build/libs/yentra-*.jar | head -n1)
+          fi
+          test -f "$jar"
           echo "path=$jar" >> "$GITHUB_OUTPUT"
           echo "name=$(basename "$jar")" >> "$GITHUB_OUTPUT"
 
