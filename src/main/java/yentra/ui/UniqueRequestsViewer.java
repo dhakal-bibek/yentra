@@ -164,6 +164,9 @@ public final class UniqueRequestsViewer {
     /** When true every new UNIQUE that arrives is automatically forwarded to connected peers. */
     private static volatile boolean autoShare;
 
+    /** True only for a transport role allowed to originate shared requests. */
+    private static volatile boolean sharingEnabled;
+
     /** Bounded executor for auto-sharing uniques to peers — prevents thread explosion under heavy traffic. */
     private static final ThreadPoolExecutor SHARE_EXECUTOR = new ThreadPoolExecutor(
             1, 2, 30, TimeUnit.SECONDS,
@@ -180,6 +183,10 @@ public final class UniqueRequestsViewer {
     /** Toggle automatic sharing of every new unique request. */
     public static void setAutoShare(boolean active) {
         autoShare = active;
+    }
+
+    public static void setSharingEnabled(boolean enabled) {
+        sharingEnabled = enabled;
     }
 
     private static final boolean IS_MAC = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
@@ -451,6 +458,10 @@ public final class UniqueRequestsViewer {
         shareBtn.setToolTipText("<html>Share the selected request with connected peers.<br>"
                 + "Open the <b>Yentra Share</b> tab, start a server or connect to a friend first.</html>");
         shareBtn.addActionListener(e -> {
+            if (!sharingEnabled) {
+                status.setText("Receive-only connection — only the host can share requests.");
+                return;
+            }
             List<HttpRequestResponse> sel = selectedRows();
             if (sel.isEmpty()) { status.setText("Select a request first."); return; }
             HttpRequestResponse rr = sel.get(0);

@@ -16,6 +16,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
 
 public class ShareServer {
+    private static final int MAX_INBOUND_MESSAGE_BYTES = 64 * 1024 * 1024;
     private final MontoyaApi api;
     private final int port;
     private final BiConsumer<HttpRequestResponse, String> onReceive;
@@ -191,20 +192,12 @@ public class ShareServer {
             try {
                 while (running && !socket.isClosed()) {
                     int msgLen = in.readInt();
-                    byte[] payload = new byte[msgLen];
-                    in.readFully(payload);
-                    HttpRequestResponse rr = decodeMessage(payload);
-                    if (rr == null) continue;
-
-                    if (onReceive != null) {
-                        String caption = extractCaption(payload);
-                        onReceive.accept(rr, caption);
+                    if (msgLen < 0 || msgLen > MAX_INBOUND_MESSAGE_BYTES) {
+                        throw new IOException("invalid message length: " + msgLen);
                     }
-
-                    byte[] msg = payload;
-                    for (ClientHandler h : clients) {
-                        if (h != this) h.send(msg);
-                    }
+                    in.skipNBytes(msgLen);
+                    api.logging().logToOutput("[yentra] Ignored request from receive-only client: "
+                            + socket.getRemoteSocketAddress());
                 }
             } catch (EOFException | SocketException ignored) {
             } catch (IOException e) {

@@ -17,7 +17,6 @@ public class ShareClient {
     private final Runnable onConnectionChange;
     private Socket socket;
     private DataInputStream in;
-    private OutputStream out;
     private volatile boolean connected;
     private Thread readThread;
 
@@ -60,7 +59,6 @@ public class ShareClient {
         }
         socket = connectedSocket;
         in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
-        out = socket.getOutputStream();
         connected = true;
         readThread = new Thread(this::readLoop, "liveshare-client-read");
         readThread.setDaemon(true);
@@ -81,20 +79,9 @@ public class ShareClient {
     public boolean isConnected() { return connected; }
 
     public void share(HttpRequestResponse rr, String caption) {
-        if (!connected) return;
-        byte[] msg = ShareServer.encodeMessage(rr, caption);
-        if (msg == null) return;
-        try {
-            synchronized (out) {
-                DataOutputStream dos = new DataOutputStream(out);
-                dos.writeInt(msg.length);
-                dos.write(msg);
-                dos.flush();
-            }
-        } catch (IOException e) {
-            api.logging().logToError("[yentra] share send failed: " + e);
-            disconnect();
-        }
+        // A connecting client is the receiver. Only the hosting ShareServer may
+        // originate requests, so receiver traffic can never flow back to sender.
+        api.logging().logToOutput("[yentra] Share blocked — this connection is receive-only.");
     }
 
     private void readLoop() {

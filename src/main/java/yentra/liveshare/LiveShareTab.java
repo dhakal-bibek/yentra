@@ -210,7 +210,7 @@ public class LiveShareTab {
         autoShareCb.setToolTipText("<html>When connected, every new [YENTRA] UNIQUE request in Yentra Live is "
                 + "automatically forwarded to peers. Untick to share manually only.</html>");
         autoShareCb.addItemListener(e -> {
-            UniqueRequestsViewer.setAutoShare(autoShareCb.isSelected() && isAnyConnectionActive());
+            UniqueRequestsViewer.setAutoShare(autoShareCb.isSelected() && canSend());
         });
 
         reissueCb.setToolTipText("<html>Re-issues every received shared request <b>through Burp's local proxy</b> so it "
@@ -434,7 +434,7 @@ public class LiveShareTab {
                     client = c;
                     connectBtn.setText("Disconnect");
                     connectBtn.setEnabled(true);
-                    clientStatus.setText("Connected to " + fHost + ":" + fPort);
+                    clientStatus.setText("Connected (receive-only) to " + fHost + ":" + fPort);
                     clientStatus.setForeground(new Color(0, 128, 0));
                     startServerBtn.setEnabled(false);
                     serverPortField.setEnabled(false);
@@ -542,13 +542,6 @@ public class LiveShareTab {
         updateShareButton();
     }
 
-    /** True if any transport (server / client / relay) is currently connected. */
-    private boolean isAnyConnectionActive() {
-        return (server != null && server.isRunning())
-                || (client != null && client.isConnected())
-                || (relayClient != null && relayClient.isRunning());
-    }
-
     /** Called by the share handler from UniqueRequestsViewer or from the network. */
     private void onReceived(HttpRequestResponse rr, String caption) {
         HttpRequest request = rr.request();
@@ -625,10 +618,15 @@ public class LiveShareTab {
     }
 
     private void enableSharing() {
+        boolean sender = canSend();
+        autoShareCb.setEnabled(sender);
+        UniqueRequestsViewer.setSharingEnabled(sender);
         updateShareButton();
-        UniqueRequestsViewer.setAutoShare(autoShareCb.isSelected());
-        api.logging().logToOutput("[yentra] Live Share active — auto-sharing "
-                + (autoShareCb.isSelected() ? "ON" : "OFF") + ".");
+        UniqueRequestsViewer.setAutoShare(sender && autoShareCb.isSelected());
+        api.logging().logToOutput(sender
+                ? "[yentra] Live Share sender active — auto-sharing "
+                    + (autoShareCb.isSelected() ? "ON" : "OFF") + "."
+                : "[yentra] Live Share receiver active — receive-only mode.");
     }
 
     private void stopSharing() {
@@ -647,6 +645,8 @@ public class LiveShareTab {
         if (client != null) { client.disconnect(); client = null; }
         if (relayClient != null) { relayClient.disconnect(); relayClient = null; }
         UniqueRequestsViewer.setAutoShare(false);
+        UniqueRequestsViewer.setSharingEnabled(false);
+        autoShareCb.setEnabled(true);
         updateShareButton();
         api.logging().logToOutput("[yentra] Live Share stopped.");
     }
@@ -665,7 +665,7 @@ public class LiveShareTab {
         SwingUtilities.invokeLater(() -> {
             if (client != null && client.isConnected()) {
                 connectBtn.setText("Disconnect");
-                clientStatus.setText("Connected to " + connectHostField.getText().trim()
+                clientStatus.setText("Connected (receive-only) to " + connectHostField.getText().trim()
                         + ":" + connectPortField.getText().trim());
                 clientStatus.setForeground(new Color(0, 128, 0));
             } else {
@@ -675,6 +675,8 @@ public class LiveShareTab {
                 startServerBtn.setEnabled(true);
                 serverPortField.setEnabled(true);
                 UniqueRequestsViewer.setAutoShare(false);
+                UniqueRequestsViewer.setSharingEnabled(false);
+                autoShareCb.setEnabled(true);
             }
             updateShareButton();
         });
@@ -698,11 +700,13 @@ public class LiveShareTab {
         });
     }
 
-    private void updateShareButton() {
-        boolean active = (server != null && server.isRunning())
-                || (client != null && client.isConnected())
+    private boolean canSend() {
+        return (server != null && server.isRunning())
                 || (relayClient != null && relayClient.isRunning());
-        shareBtn.setEnabled(active && currentRequest != null);
+    }
+
+    private void updateShareButton() {
+        shareBtn.setEnabled(canSend() && currentRequest != null);
     }
 
     public void setCurrentRequest(HttpRequest request) {
@@ -714,6 +718,10 @@ public class LiveShareTab {
     }
 
     private void shareCurrentRequest() {
+        if (!canSend()) {
+            api.logging().logToOutput("[yentra] Share blocked — connected clients are receive-only.");
+            return;
+        }
         HttpRequest req = requestEditor.getRequest();
         if (req == null || req.httpService() == null) {
             JOptionPane.showMessageDialog(root,
@@ -734,13 +742,11 @@ public class LiveShareTab {
 
     /** Runs the network send on a background thread so the EDT never blocks. */
     private void doSend(HttpRequestResponse rr, String caption, boolean logIt) {
+        if (!canSend()) return;
         Thread t = new Thread(() -> {
             boolean sent = false;
             if (server != null && server.isRunning()) {
                 server.broadcast(rr, caption);
-                sent = true;
-            } else if (client != null && client.isConnected()) {
-                client.share(rr, caption);
                 sent = true;
             } else if (relayClient != null && relayClient.isRunning()) {
                 relayClient.share(rr, caption);
