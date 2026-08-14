@@ -31,12 +31,34 @@ public class ShareClient {
         this.onConnectionChange = onConnectionChange;
     }
 
-    private static final int CONNECT_TIMEOUT_MS = 5000;
+    private static final int CONNECT_TIMEOUT_MS = 10000;
 
     public synchronized void connect() throws IOException {
         if (connected) return;
-        socket = new Socket();
-        socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
+        IOException lastFailure = null;
+        InetAddress[] addresses = InetAddress.getAllByName(host);
+        Socket connectedSocket = null;
+        for (InetAddress address : addresses) {
+            Socket candidate = new Socket();
+            try {
+                candidate.setTcpNoDelay(true);
+                candidate.connect(new InetSocketAddress(address, port), CONNECT_TIMEOUT_MS);
+                connectedSocket = candidate;
+                lastFailure = null;
+                break;
+            } catch (IOException e) {
+                lastFailure = e;
+                try { candidate.close(); } catch (IOException ignored) {}
+            }
+        }
+        if (connectedSocket == null) {
+            String detail = lastFailure != null && lastFailure.getMessage() != null
+                    ? lastFailure.getMessage() : "no address was reachable";
+            throw new IOException("Could not connect to " + host + ":" + port
+                    + " (tried " + addresses.length + " address"
+                    + (addresses.length == 1 ? "" : "es") + "): " + detail);
+        }
+        socket = connectedSocket;
         in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
         out = socket.getOutputStream();
         connected = true;

@@ -36,7 +36,11 @@ public class ShareServer {
 
     public synchronized void start() throws IOException {
         if (running) return;
-        serverSocket = new ServerSocket(port);
+        // Reuse the port after a stop/restart and bind all interfaces so peers on
+        // the LAN/VPN can reach the extension (the UI advertises the address).
+        serverSocket = new ServerSocket();
+        serverSocket.setReuseAddress(true);
+        serverSocket.bind(new InetSocketAddress("0.0.0.0", port), 50);
         running = true;
         acceptThread = new Thread(this::acceptLoop, "liveshare-accept");
         acceptThread.setDaemon(true);

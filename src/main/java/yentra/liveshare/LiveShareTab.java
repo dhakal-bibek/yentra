@@ -81,7 +81,10 @@ public class LiveShareTab {
     private final JButton connectRelayBtn = new JButton("Connect");
     private final JLabel relayStatus = new JLabel("Disconnected");
 
-    private static final String DEFAULT_HOST = "localhost";
+    // localhost is the peer's own machine, so it is almost never the host the
+    // user intends to connect to. Leave it blank and require the advertised
+    // LAN/VPN/public address instead.
+    private static final String DEFAULT_HOST = "";
 
     public LiveShareTab(MontoyaApi api, UniqueFeed liveFeed) {
         this.api = api;
@@ -438,10 +441,15 @@ public class LiveShareTab {
                     enableSharing();
                 });
             } catch (Exception ex) {
-                String failMsg = (ex instanceof SocketException && ex.getMessage() != null
-                        && ex.getMessage().contains("Connection refused"))
-                        ? "Connection refused"
-                        : "Failed: " + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
+                String message = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
+                String failMsg;
+                if (message.contains("Connection refused")) {
+                    failMsg = "Connection refused — check the host is running on port " + fPort;
+                } else if (message.contains("timed out") || ex instanceof java.net.SocketTimeoutException) {
+                    failMsg = "Connection timed out — use the host's LAN/VPN/public IP, not localhost";
+                } else {
+                    failMsg = "Failed: " + message;
+                }
                 api.logging().logToError("[yentra] connect failed: " + ex);
                 SwingUtilities.invokeLater(() -> {
                     clientStatus.setText(failMsg);
