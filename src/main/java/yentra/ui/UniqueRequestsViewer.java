@@ -556,7 +556,7 @@ public final class UniqueRequestsViewer {
         scopeChip.setToolTipText("Show only requests in Target scope.");
         scopeChip.addItemListener(e -> applyFilter());
 
-        sharedChip.setToolTipText("Show only requests from Live Share peers.");
+        sharedChip.setToolTipText("Selected: Live Share requests. Unselected: your local requests.");
         sharedChip.addItemListener(e -> applyFilter());
 
         hideOptionsChip.setSelected(true);
@@ -1080,9 +1080,9 @@ private void fillPalettePanelContent() {
     private void applyFilterNow() {
         List<RowFilter<Object, Object>> filters = new ArrayList<>();
 
-        if (sharedChip.isSelected()) {
-            filters.add(sharedRowFilter());
-        }
+        // Shared is an ownership mode, not an optional narrowing filter: the two
+        // states must never mix peer traffic with the receiver's local traffic.
+        filters.add(ownershipRowFilter(sharedChip.isSelected()));
         if (scopeChip.isSelected()) {
             filters.add(scopeRowFilter());
         }
@@ -1314,12 +1314,12 @@ private void fillPalettePanelContent() {
         };
     }
 
-    /** A row filter that keeps only requests that arrived via Live Share. */
-    private RowFilter<Object, Object> sharedRowFilter() {
+    /** Keeps either received Live Share rows or local rows, never both. */
+    private RowFilter<Object, Object> ownershipRowFilter(boolean shared) {
         return new RowFilter<>() {
             @Override public boolean include(Entry<? extends Object, ? extends Object> entry) {
                 Object id = entry.getIdentifier();
-                return id instanceof Integer && rowIsShared((Integer) id);
+                return id instanceof Integer && rowIsShared((Integer) id) == shared;
             }
         };
     }
